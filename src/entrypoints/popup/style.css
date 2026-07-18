@@ -57,15 +57,9 @@ header {
 }
 
 .logo {
-  display: grid;
   width: 42px;
   height: 42px;
-  place-items: center;
   border-radius: 12px;
-  color: var(--primary-text);
-  background: var(--primary);
-  font-size: 22px;
-  font-weight: 750;
 }
 
 h1,

@@ -58,6 +58,7 @@ import {
   sameBookmarkSnapshot,
 } from "./bookmarks";
 import { queryHistoryUrls, reconcileHistory } from "./history";
+import { updateToolbarStatus } from "./action-status";
 
 const SYNC_ALARM = "tabsync-poll";
 
@@ -137,6 +138,7 @@ class SyncEngine {
     this.historyActive = this.active && historyEnabled === true;
     if (!this.active) {
       await chrome.alarms.clear(SYNC_ALARM);
+      await this.updateToolbar();
       return;
     }
     await this.ensureAlarm();
@@ -147,6 +149,7 @@ class SyncEngine {
     await getAccessToken(true);
     await chrome.storage.local.set({ connected: true });
     this.lastError = undefined;
+    await this.updateToolbar();
   }
 
   async enable(): Promise<void> {
@@ -179,6 +182,7 @@ class SyncEngine {
     this.bookmarksActive = false;
     this.historyActive = false;
     await chrome.alarms.clear(SYNC_ALARM);
+    await this.updateToolbar();
   }
 
   async disconnect(): Promise<void> {
@@ -189,6 +193,7 @@ class SyncEngine {
     this.historyActive = false;
     await chrome.alarms.clear(SYNC_ALARM);
     this.lastError = undefined;
+    await this.updateToolbar();
   }
 
   async syncNow(): Promise<void> {
@@ -271,6 +276,7 @@ class SyncEngine {
       return { ok: true, status: await this.safeStatus() };
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
+      await this.updateToolbar();
       return {
         ok: false,
         error: this.lastError,
@@ -281,6 +287,7 @@ class SyncEngine {
 
   reportError(error: unknown): void {
     this.lastError = error instanceof Error ? error.message : String(error);
+    void this.updateToolbar();
   }
 
   private async safeStatus(cause?: string): Promise<SyncStatus> {
@@ -290,6 +297,7 @@ class SyncEngine {
       const statusError = error instanceof Error ? error.message : String(error);
       const combinedError = cause ? `${cause}; status: ${statusError}` : statusError;
       this.lastError = combinedError;
+      await this.updateToolbar();
       return {
         connected: false,
         enabled: false,
@@ -308,6 +316,7 @@ class SyncEngine {
   private async runQueued(task: () => Promise<void>): Promise<void> {
     const next = this.queue.then(async () => {
       this.syncing = true;
+      await this.updateToolbar();
       try {
         await task();
         this.lastError = undefined;
@@ -316,10 +325,28 @@ class SyncEngine {
         throw error;
       } finally {
         this.syncing = false;
+        await this.updateToolbar();
       }
     });
     this.queue = next.catch(() => undefined);
     return next;
+  }
+
+  private async updateToolbar(): Promise<void> {
+    try {
+      const { connected, enabled } = await chrome.storage.local.get([
+        "connected",
+        "enabled",
+      ]);
+      await updateToolbarStatus({
+        connected: connected === true,
+        enabled: enabled === true,
+        syncing: this.syncing,
+        ...(this.lastError ? { error: this.lastError } : {}),
+      });
+    } catch (error) {
+      console.warn("Не удалось прочитать состояние TabSync для toolbar", error);
+    }
   }
 
   private async sync(captureFirst: boolean): Promise<void> {

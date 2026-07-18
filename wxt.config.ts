@@ -14,6 +14,12 @@ export default defineConfig({
   manifest: {
     name: "TabSync",
     description: "Synchronize tabs, bookmarks and history through Google Drive.",
+    icons: {
+      16: "icons/icon-16.png",
+      32: "icons/icon-32.png",
+      48: "icons/icon-48.png",
+      128: "icons/icon-128.png",
+    },
     permissions: ["tabs", "bookmarks", "history", "identity", "storage", "alarms"],
     host_permissions: ["https://www.googleapis.com/*"],
     oauth2: {
@@ -24,6 +30,10 @@ export default defineConfig({
     },
     action: {
       default_title: "TabSync",
+      default_icon: {
+        16: "icons/icon-16.png",
+        32: "icons/icon-32.png",
+      },
     },
     ...(extensionPublicKey ? { key: extensionPublicKey } : {}),
   },
