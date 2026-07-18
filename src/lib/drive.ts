@@ -1,4 +1,4 @@
-import { getAccessToken } from "./auth";
+import { getAccessToken, invalidateAccessToken } from "./auth";
 import {
   OPERATION_FILE_PREFIX,
   SCHEMA_VERSION,
@@ -40,7 +40,7 @@ async function driveFetch(
   const response = await fetch(input, { ...init, headers });
 
   if (response.status === 401 && retry) {
-    await chrome.identity.removeCachedAuthToken({ token });
+    await invalidateAccessToken(token);
     return driveFetch(input, init, false);
   }
   if (!response.ok) {

@@ -1,4 +1,4 @@
-import { forgetAccessToken, getAccessToken, isConnected } from "./auth";
+import { forgetAccessToken, getAccessToken } from "./auth";
 import {
   enqueueOperations,
   getCanonicalState,
@@ -43,6 +43,7 @@ class SyncEngine {
   private active = false;
   private lastError: string | undefined;
   private dirty = false;
+  private localRevision = 0;
   private captureTimer: ReturnType<typeof setTimeout> | undefined;
   private queue: Promise<void> = Promise.resolve();
 
@@ -56,6 +57,7 @@ class SyncEngine {
   noteLocalChange(): void {
     if (!this.active) return;
     this.dirty = true;
+    this.localRevision += 1;
     if (this.captureTimer) clearTimeout(this.captureTimer);
     this.captureTimer = setTimeout(() => {
       this.captureTimer = undefined;
@@ -75,6 +77,7 @@ class SyncEngine {
 
   async connect(): Promise<void> {
     await getAccessToken(true);
+    await chrome.storage.local.set({ connected: true });
     this.lastError = undefined;
   }
 
@@ -92,7 +95,7 @@ class SyncEngine {
         canonical = await getCanonicalState();
       }
       await this.applyRemoteState(canonical);
-      await setMeta("lastSyncAt", Date.now());
+      await this.recordLastSync();
     });
   }
 
@@ -116,16 +119,19 @@ class SyncEngine {
   }
 
   async status(): Promise<SyncStatus> {
-    const canonical = await getCanonicalState();
+    const [settings, tabs] = await Promise.all([
+      chrome.storage.local.get(["connected", "enabled", "lastSyncAt", "deviceId"]),
+      querySupportedTabs(),
+    ]);
     const status: SyncStatus = {
-      connected: await isConnected(),
-      enabled: await isEnabled(),
+      connected: settings.connected === true,
+      enabled: settings.enabled === true,
       syncing: this.syncing,
-      tabCount: activeTabs(canonical).length,
-      deviceId: await getDeviceId(),
+      tabCount: tabs.length,
+      deviceId:
+        typeof settings.deviceId === "string" ? settings.deviceId : "not-initialized",
     };
-    const lastSyncAt = await getMeta<number | undefined>("lastSyncAt", undefined);
-    if (lastSyncAt !== undefined) status.lastSyncAt = lastSyncAt;
+    if (typeof settings.lastSyncAt === "number") status.lastSyncAt = settings.lastSyncAt;
     if (this.lastError !== undefined) status.error = this.lastError;
     return status;
   }
@@ -133,10 +139,36 @@ class SyncEngine {
   async respond(action: () => Promise<void>): Promise<RuntimeResponse> {
     try {
       await action();
-      return { ok: true, status: await this.status() };
+      return { ok: true, status: await this.safeStatus() };
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: this.lastError, status: await this.status() };
+      return {
+        ok: false,
+        error: this.lastError,
+        status: await this.safeStatus(this.lastError),
+      };
+    }
+  }
+
+  reportError(error: unknown): void {
+    this.lastError = error instanceof Error ? error.message : String(error);
+  }
+
+  private async safeStatus(cause?: string): Promise<SyncStatus> {
+    try {
+      return await this.status();
+    } catch (error) {
+      const statusError = error instanceof Error ? error.message : String(error);
+      const combinedError = cause ? `${cause}; status: ${statusError}` : statusError;
+      this.lastError = combinedError;
+      return {
+        connected: false,
+        enabled: false,
+        syncing: this.syncing,
+        tabCount: 0,
+        deviceId: "unavailable",
+        error: combinedError,
+      };
     }
   }
 
@@ -159,14 +191,39 @@ class SyncEngine {
 
   private async sync(captureFirst: boolean): Promise<void> {
     if (!(await isEnabled())) return;
+    let stableRevision = this.localRevision;
     if (captureFirst) {
-      await this.captureLocalChanges();
-      this.dirty = false;
-      await this.flushOutbox();
+      const capturedRevision = await this.captureAndFlushUntilStable();
+      if (capturedRevision === undefined) return;
+      stableRevision = capturedRevision;
     }
     await this.pullRemote();
+
+    // A tab may be closed while an earlier upsert is being uploaded or while
+    // Drive changes are being downloaded. Applying the stale canonical state
+    // here would recreate that tab. The scheduled local-change pass will first
+    // persist the newer browser state and reconcile safely afterwards.
+    if (this.localRevision !== stableRevision) return;
+
     await this.applyRemoteState(await getCanonicalState());
-    await setMeta("lastSyncAt", Date.now());
+    await this.recordLastSync();
+  }
+
+  private async captureAndFlushUntilStable(): Promise<number | undefined> {
+    for (let pass = 0; pass < 3; pass += 1) {
+      const revision = this.localRevision;
+      await this.captureLocalChanges();
+      await this.flushOutbox();
+      if (revision === this.localRevision) {
+        this.dirty = false;
+        return revision;
+      }
+    }
+    return undefined;
+  }
+
+  private async recordLastSync(): Promise<void> {
+    await chrome.storage.local.set({ lastSyncAt: Date.now() });
   }
 
   private async nextClock(): Promise<Clock> {
@@ -329,7 +386,6 @@ class SyncEngine {
   private async applyRemoteState(canonical: CanonicalState): Promise<void> {
     const mappings = await reconcileTabs(activeTabs(canonical), await getMappings());
     await replaceMappings(mappings);
-    this.dirty = false;
   }
 }
 

@@ -20,7 +20,7 @@ export default defineBackground(() => {
   });
 
   chrome.runtime.onStartup.addListener(() => {
-    void syncEngine.startup().catch(() => undefined);
+    void syncEngine.startup().catch((error) => syncEngine.reportError(error));
   });
   chrome.runtime.onMessage.addListener(
     (request: RuntimeRequest, _sender, sendResponse: (response: RuntimeResponse) => void) => {
@@ -45,5 +45,5 @@ export default defineBackground(() => {
     },
   );
 
-  void syncEngine.startup().catch(() => undefined);
+  void syncEngine.startup().catch((error) => syncEngine.reportError(error));
 });

@@ -23,14 +23,32 @@ interface TabSyncDatabase extends DBSchema {
 let databasePromise: Promise<IDBPDatabase<TabSyncDatabase>> | undefined;
 
 function database(): Promise<IDBPDatabase<TabSyncDatabase>> {
-  databasePromise ??= openDB<TabSyncDatabase>("tabsync", 1, {
-    upgrade(db) {
-      db.createObjectStore("meta");
-      db.createObjectStore("mappings");
-      db.createObjectStore("outbox");
-      db.createObjectStore("seenFiles");
-    },
-  });
+  if (!databasePromise) {
+    const opening = openDB<TabSyncDatabase>("tabsync", 1, {
+      upgrade(db) {
+        if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta");
+        if (!db.objectStoreNames.contains("mappings")) db.createObjectStore("mappings");
+        if (!db.objectStoreNames.contains("outbox")) db.createObjectStore("outbox");
+        if (!db.objectStoreNames.contains("seenFiles")) db.createObjectStore("seenFiles");
+      },
+      blocked() {
+        console.error("TabSync IndexedDB opening is blocked by another extension context");
+      },
+    });
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new Error("Не удалось открыть локальную базу TabSync за 3 секунды")),
+        3_000,
+      );
+    });
+    databasePromise = Promise.race([opening, timeout])
+      .finally(() => clearTimeout(timeoutId))
+      .catch((error) => {
+        databasePromise = undefined;
+        throw error;
+      });
+  }
   return databasePromise;
 }
 
@@ -44,19 +62,20 @@ export async function setMeta<T>(key: string, value: T): Promise<void> {
 }
 
 export async function getDeviceId(): Promise<string> {
-  const existing = await getMeta<string | undefined>("deviceId", undefined);
-  if (existing) return existing;
+  const { deviceId: existing } = await chrome.storage.local.get("deviceId");
+  if (typeof existing === "string" && existing) return existing;
   const id = crypto.randomUUID();
-  await setMeta("deviceId", id);
+  await chrome.storage.local.set({ deviceId: id });
   return id;
 }
 
 export async function isEnabled(): Promise<boolean> {
-  return getMeta("enabled", false);
+  const { enabled } = await chrome.storage.local.get("enabled");
+  return enabled === true;
 }
 
 export async function setEnabled(enabled: boolean): Promise<void> {
-  await setMeta("enabled", enabled);
+  await chrome.storage.local.set({ enabled });
 }
 
 export async function getCanonicalState(): Promise<CanonicalState> {
@@ -135,7 +154,7 @@ export async function resetRemoteState(): Promise<void> {
     transaction.objectStore("meta").delete("changeToken"),
     transaction.objectStore("meta").delete("lastClock"),
     transaction.objectStore("meta").delete("cloudInitialized"),
-    transaction.objectStore("meta").put(false, "enabled"),
   ]);
   await transaction.done;
+  await chrome.storage.local.set({ enabled: false, connected: false });
 }

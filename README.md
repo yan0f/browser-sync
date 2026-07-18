@@ -6,7 +6,7 @@ user's hidden Google Drive `appDataFolder`; no application backend is required.
 
 ## Current MVP
 
-- Google OAuth through `chrome.identity`
+- portable Google OAuth through `chrome.identity.launchWebAuthFlow`
 - race-free immutable operation batches in Google Drive
 - incremental polling through the Drive Changes API
 - local durable state and outbox in IndexedDB
@@ -37,8 +37,15 @@ browser profile.
 6. Run `npm install` and `npm run build`.
 7. Load `.output/chrome-mv3` as an unpacked extension at `chrome://extensions`.
 8. Copy the generated extension ID.
-9. Create an OAuth client of type **Chrome Extension** using that extension ID.
-10. Set `WXT_GOOGLE_CLIENT_ID` in `.env`, then rebuild and reload the extension.
+9. Create an OAuth client of type **Web application** and add this exact
+   authorized redirect URI:
+
+   ```text
+   https://<EXTENSION_ID>.chromiumapp.org/oauth2
+   ```
+
+10. Set that web client ID as `WXT_GOOGLE_CLIENT_ID` in `.env`, then rebuild and
+    reload the extension.
 
 Use the same public extension key and OAuth client ID on the second machine. A
 Chrome Web Store release already has a stable extension ID and does not need the
@@ -46,6 +53,8 @@ development-key workaround.
 
 Interactive OAuth must be initiated from the popup. The extension requests only
 the `drive.appdata` scope and cannot access normal files in the user's Drive.
+The Web application client is required for Helium, Brave, Edge and other
+Chromium builds where Chrome's profile-bound `getAuthToken()` is unavailable.
 
 ## Development
 
