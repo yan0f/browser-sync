@@ -60,7 +60,7 @@ import {
 import { queryHistoryUrls, reconcileHistory } from "./history";
 import { updateToolbarStatus } from "./action-status";
 
-const SYNC_ALARM = "tabsync-poll";
+const SYNC_ALARM = "browsersync-poll";
 
 class SyncEngine {
   private syncing = false;
@@ -129,11 +129,20 @@ class SyncEngine {
   }
 
   async startup(): Promise<void> {
-    this.active = await isEnabled();
-    const { bookmarksEnabled, historyEnabled } = await chrome.storage.local.get([
-      "bookmarksEnabled",
-      "historyEnabled",
-    ]);
+    const { browserSyncInitialized, bookmarksEnabled, historyEnabled } =
+      await chrome.storage.local.get([
+        "browserSyncInitialized",
+        "bookmarksEnabled",
+        "historyEnabled",
+      ]);
+    if (browserSyncInitialized !== true) {
+      await chrome.storage.local.set({
+        browserSyncInitialized: true,
+        enabled: false,
+      });
+    }
+    this.active = browserSyncInitialized === true && (await isEnabled());
+    /* Settings are intentionally retained across development resets. */
     this.bookmarksActive = this.active && bookmarksEnabled === true;
     this.historyActive = this.active && historyEnabled === true;
     if (!this.active) {
@@ -345,7 +354,7 @@ class SyncEngine {
         ...(this.lastError ? { error: this.lastError } : {}),
       });
     } catch (error) {
-      console.warn("Не удалось прочитать состояние TabSync для toolbar", error);
+      console.warn("Не удалось прочитать состояние BrowserSync для toolbar", error);
     }
   }
 
@@ -542,7 +551,7 @@ class SyncEngine {
       id: crypto.randomUUID(),
       deviceId: await getDeviceId(),
       clock: await this.nextClock(),
-      type: "history-delta-v2",
+      type: "history-delta",
       added,
       removed,
       ...(clear ? { clear: true } : {}),

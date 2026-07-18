@@ -12,7 +12,7 @@ const extensionPublicKey =
 export default defineConfig({
   srcDir: "src",
   manifest: {
-    name: "TabSync",
+    name: "BrowserSync",
     description: "Synchronize tabs, bookmarks and history through Google Drive.",
     icons: {
       16: "icons/icon-16.png",
@@ -25,11 +25,11 @@ export default defineConfig({
     oauth2: {
       client_id:
         googleClientId ??
-        "000000000000-configure-tabsync.apps.googleusercontent.com",
+        "000000000000-configure-browsersync.apps.googleusercontent.com",
       scopes: [driveScope],
     },
     action: {
-      default_title: "TabSync",
+      default_title: "BrowserSync",
       default_icon: {
         16: "icons/icon-16.png",
         32: "icons/icon-32.png",

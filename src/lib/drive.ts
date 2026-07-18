@@ -29,6 +29,10 @@ interface ChangeListResponse {
   }>;
 }
 
+function isOperationFileName(name: string): boolean {
+  return name.startsWith(OPERATION_FILE_PREFIX);
+}
+
 async function driveFetch(
   input: string,
   init: RequestInit = {},
@@ -61,7 +65,7 @@ export async function createOperationFile(
     operations,
   };
   const name = `${OPERATION_FILE_PREFIX}${deviceId}-${Date.now()}-${crypto.randomUUID()}.json`;
-  const boundary = `tabsync-${crypto.randomUUID()}`;
+  const boundary = `browsersync-${crypto.randomUUID()}`;
   const metadata = JSON.stringify({ name, parents: ["appDataFolder"] });
   const body = [
     `--${boundary}`,
@@ -135,11 +139,13 @@ export async function listChangedOperationFiles(
     ).json()) as ChangeListResponse;
 
     for (const change of result.changes ?? []) {
+      const file = change.file;
       if (
         !change.removed &&
-        change.file?.name.startsWith(OPERATION_FILE_PREFIX)
+        file &&
+        isOperationFileName(file.name)
       ) {
-        files.push(change.file);
+        files.push(file);
       }
     }
 
@@ -158,7 +164,7 @@ export async function downloadOperationBatch(fileId: string): Promise<OperationB
   const response = await driveFetch(`${API_ROOT}/files/${fileId}?alt=media`);
   const batch = (await response.json()) as OperationBatch;
   if (batch.schemaVersion !== SCHEMA_VERSION || !Array.isArray(batch.operations)) {
-    throw new Error(`Unsupported TabSync operation file: ${fileId}`);
+    throw new Error(`Unsupported BrowserSync operation file: ${fileId}`);
   }
   return batch;
 }

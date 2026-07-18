@@ -12,7 +12,7 @@ interface StoredToken {
 
 function clientId(): string {
   const id = chrome.runtime.getManifest().oauth2?.client_id;
-  if (!id || id.includes("configure-tabsync")) {
+  if (!id || id.includes("configure-browsersync")) {
     throw new Error("Google OAuth client ID не настроен в .env");
   }
   return id;

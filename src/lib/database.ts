@@ -7,7 +7,7 @@ import type {
   SyncOperation,
 } from "./model";
 
-interface TabSyncDatabase extends DBSchema {
+interface BrowserSyncDatabase extends DBSchema {
   meta: {
     key: string;
     value: unknown;
@@ -26,11 +26,13 @@ interface TabSyncDatabase extends DBSchema {
   };
 }
 
-let databasePromise: Promise<IDBPDatabase<TabSyncDatabase>> | undefined;
+const DATABASE_NAME = "browsersync";
 
-function database(): Promise<IDBPDatabase<TabSyncDatabase>> {
+let databasePromise: Promise<IDBPDatabase<BrowserSyncDatabase>> | undefined;
+
+function database(): Promise<IDBPDatabase<BrowserSyncDatabase>> {
   if (!databasePromise) {
-    const opening = openDB<TabSyncDatabase>("tabsync", 1, {
+    const opening = openDB<BrowserSyncDatabase>(DATABASE_NAME, 1, {
       upgrade(db) {
         if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta");
         if (!db.objectStoreNames.contains("mappings")) db.createObjectStore("mappings");
@@ -38,13 +40,13 @@ function database(): Promise<IDBPDatabase<TabSyncDatabase>> {
         if (!db.objectStoreNames.contains("seenFiles")) db.createObjectStore("seenFiles");
       },
       blocked() {
-        console.error("TabSync IndexedDB opening is blocked by another extension context");
+        console.error("BrowserSync IndexedDB opening is blocked by another extension context");
       },
     });
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       timeoutId = setTimeout(
-        () => reject(new Error("Не удалось открыть локальную базу TabSync за 3 секунды")),
+        () => reject(new Error("Не удалось открыть локальную базу BrowserSync за 3 секунды")),
         3_000,
       );
     });
@@ -105,15 +107,15 @@ export async function setCanonicalBookmarks(
 }
 
 export async function getCanonicalHistory(): Promise<CanonicalHistory | undefined> {
-  return getMeta<CanonicalHistory | undefined>("canonicalHistoryV2", undefined);
+  return getMeta<CanonicalHistory | undefined>("canonicalHistory", undefined);
 }
 
 export async function setCanonicalHistory(
   state: CanonicalHistory | undefined,
 ): Promise<void> {
   const db = await database();
-  if (state === undefined) await db.delete("meta", "canonicalHistoryV2");
-  else await db.put("meta", state, "canonicalHistoryV2");
+  if (state === undefined) await db.delete("meta", "canonicalHistory");
+  else await db.put("meta", state, "canonicalHistory");
 }
 
 export async function getLastClock(): Promise<Clock | undefined> {
@@ -183,7 +185,6 @@ export async function resetRemoteState(): Promise<void> {
     transaction.objectStore("meta").delete("canonical"),
     transaction.objectStore("meta").delete("canonicalBookmarks"),
     transaction.objectStore("meta").delete("canonicalHistory"),
-    transaction.objectStore("meta").delete("canonicalHistoryV2"),
     transaction.objectStore("meta").delete("changeToken"),
     transaction.objectStore("meta").delete("lastClock"),
     transaction.objectStore("meta").delete("cloudInitialized"),

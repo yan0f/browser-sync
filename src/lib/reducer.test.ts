@@ -105,7 +105,7 @@ describe("canonical reducer", () => {
       id: "history-a",
       deviceId: "a",
       clock: clock(20),
-      type: "history-delta-v2",
+      type: "history-delta",
       added: ["https://a.example"],
       removed: [],
     };
@@ -113,7 +113,7 @@ describe("canonical reducer", () => {
       id: "history-b",
       deviceId: "b",
       clock: clock(21),
-      type: "history-delta-v2",
+      type: "history-delta",
       added: ["https://b.example"],
       removed: [],
     };
@@ -130,7 +130,7 @@ describe("canonical reducer", () => {
       id: "history-add",
       deviceId: "a",
       clock: clock(30),
-      type: "history-delta-v2",
+      type: "history-delta",
       added: ["https://example.com"],
       removed: [],
     };
@@ -138,7 +138,7 @@ describe("canonical reducer", () => {
       id: "history-remove",
       deviceId: "b",
       clock: clock(31),
-      type: "history-delta-v2",
+      type: "history-delta",
       added: [],
       removed: ["https://example.com"],
     };
@@ -147,25 +147,12 @@ describe("canonical reducer", () => {
     expect(activeHistoryUrls(state!)).toEqual([]);
   });
 
-  it("ignores the legacy history snapshot format", () => {
-    const legacy: SyncOperation = {
-      id: "legacy-history",
-      deviceId: "a",
-      clock: clock(40),
-      type: "history-delta",
-      added: ["https://legacy.example"],
-      removed: [],
-    };
-
-    expect(applyHistoryOperations(undefined, [legacy])).toBeUndefined();
-  });
-
   it("adds a new visit after synchronized history was cleared", () => {
     const initial: SyncOperation = {
       id: "initial-history",
       deviceId: "a",
       clock: clock(50),
-      type: "history-delta-v2",
+      type: "history-delta",
       added: ["https://old.example"],
       removed: [],
     };
@@ -173,7 +160,7 @@ describe("canonical reducer", () => {
       id: "clear-history",
       deviceId: "a",
       clock: clock(51),
-      type: "history-delta-v2",
+      type: "history-delta",
       clear: true,
       added: ["https://new.example"],
       removed: [],

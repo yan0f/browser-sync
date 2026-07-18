@@ -1,4 +1,4 @@
-export const OPERATION_FILE_PREFIX = "tabsync-ops-v1-";
+export const OPERATION_FILE_PREFIX = "browsersync-ops-v1-";
 export const SCHEMA_VERSION = 1;
 
 export interface Clock {
@@ -45,14 +45,8 @@ export interface BookmarkSnapshotOperation extends OperationBase {
   snapshot: BookmarkSnapshot;
 }
 
-export interface LegacyHistoryDeltaOperation extends OperationBase {
+export interface HistoryDeltaOperation extends OperationBase {
   type: "history-delta";
-  added: string[];
-  removed: string[];
-}
-
-export interface HistoryDeltaV2Operation extends OperationBase {
-  type: "history-delta-v2";
   added: string[];
   removed: string[];
   clear?: boolean;
@@ -62,8 +56,7 @@ export type SyncOperation =
   | UpsertOperation
   | RemoveOperation
   | BookmarkSnapshotOperation
-  | LegacyHistoryDeltaOperation
-  | HistoryDeltaV2Operation;
+  | HistoryDeltaOperation;
 
 export interface OperationBatch {
   schemaVersion: 1;

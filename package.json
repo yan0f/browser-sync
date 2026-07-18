@@ -1,5 +1,5 @@
 {
-  "name": "tabsync",
+  "name": "browsersync",
   "version": "0.1.0",
   "private": true,
   "type": "module",

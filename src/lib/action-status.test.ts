@@ -5,7 +5,7 @@ describe("toolbar status", () => {
   it("shows a monochrome progress badge while syncing", () => {
     expect(
       getToolbarPresentation({ connected: true, enabled: true, syncing: true }),
-    ).toEqual({ badge: "…", title: "TabSync — синхронизация…" });
+    ).toEqual({ badge: "…", title: "BrowserSync — синхронизация…" });
   });
 
   it("shows an error badge after a failed operation", () => {

@@ -26,8 +26,7 @@ export function applyOperations(
   for (const operation of operations) {
     if (
       operation.type === "bookmark-snapshot" ||
-      operation.type === "history-delta" ||
-      operation.type === "history-delta-v2"
+      operation.type === "history-delta"
     ) {
       continue;
     }
@@ -52,7 +51,7 @@ export function applyHistoryOperations(
 ): CanonicalHistory | undefined {
   let state = initial;
   for (const operation of operations) {
-    if (operation.type !== "history-delta-v2") continue;
+    if (operation.type !== "history-delta") continue;
     state = { ...(state ?? {}) };
     if (operation.clear) {
       for (const [url, current] of Object.entries(state)) {

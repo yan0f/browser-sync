@@ -97,7 +97,7 @@ function settingToggle(
 function renderFatal(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   summary.textContent = "Ошибка запуска";
-  errorBox.textContent = `${message}. Откройте chrome://extensions → TabSync → Ошибки для подробностей.`;
+  errorBox.textContent = `${message}. Откройте chrome://extensions → BrowserSync → Ошибки для подробностей.`;
   errorBox.hidden = false;
   details.hidden = true;
   actions.replaceChildren(button("Повторить", "status"));

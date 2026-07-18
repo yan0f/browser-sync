@@ -1,6 +1,6 @@
-# TabSync
+# BrowserSync
 
-TabSync is a Manifest V3 Chromium extension that mirrors open HTTP/HTTPS tabs
+BrowserSync is a Manifest V3 Chromium extension that mirrors open HTTP/HTTPS tabs
 and, optionally, all bookmarks and visited HTTP/HTTPS addresses between browser
 installations. Synchronization data is stored in the signed-in
 user's hidden Google Drive `appDataFolder`; no application backend is required.
@@ -37,12 +37,12 @@ visits and explicit removals are propagated.
 4. For unpacked builds on multiple computers, generate one development key:
 
    ```bash
-   openssl genrsa -out tabsync-dev.pem 2048
-   openssl rsa -in tabsync-dev.pem -pubout -outform DER | openssl base64 -A
+   openssl genrsa -out browsersync-dev.pem 2048
+   openssl rsa -in browsersync-dev.pem -pubout -outform DER | openssl base64 -A
    ```
 
 5. Copy `.env.example` to `.env` and put the command output into
-   `WXT_EXTENSION_PUBLIC_KEY`. Keep `tabsync-dev.pem` private and never commit it.
+   `WXT_EXTENSION_PUBLIC_KEY`. Keep `browsersync-dev.pem` private and never commit it.
 6. Run `npm install` and `npm run build`.
 7. Load `.output/chrome-mv3` as an unpacked extension at `chrome://extensions`.
 8. Copy the generated extension ID.

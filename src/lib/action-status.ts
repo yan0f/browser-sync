@@ -15,18 +15,18 @@ const BADGE_TEXT = "#ffffff";
 
 export function getToolbarPresentation(status: ToolbarStatus): ToolbarPresentation {
   if (status.syncing) {
-    return { badge: "…", title: "TabSync — синхронизация…" };
+    return { badge: "…", title: "BrowserSync — синхронизация…" };
   }
   if (status.error) {
-    return { badge: "!", title: "TabSync — ошибка синхронизации" };
+    return { badge: "!", title: "BrowserSync — ошибка синхронизации" };
   }
   if (!status.connected) {
-    return { badge: "", title: "TabSync — Google Drive не подключён" };
+    return { badge: "", title: "BrowserSync — Google Drive не подключён" };
   }
   if (!status.enabled) {
-    return { badge: "", title: "TabSync — синхронизация приостановлена" };
+    return { badge: "", title: "BrowserSync — синхронизация приостановлена" };
   }
-  return { badge: "", title: "TabSync — синхронизировано" };
+  return { badge: "", title: "BrowserSync — синхронизировано" };
 }
 
 export async function updateToolbarStatus(status: ToolbarStatus): Promise<void> {
@@ -50,8 +50,8 @@ export async function updateToolbarStatus(status: ToolbarStatus): Promise<void> 
     const failure = results.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
-    if (failure) console.warn("Не удалось обновить статус TabSync", failure.reason);
+    if (failure) console.warn("Не удалось обновить статус BrowserSync", failure.reason);
   } catch (error) {
-    console.warn("Не удалось обновить статус TabSync", error);
+    console.warn("Не удалось обновить статус BrowserSync", error);
   }
 }
