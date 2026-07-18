@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon-512.png" width="128" height="128" alt="BrowserSync icon">
+</p>
+
 # BrowserSync
 
 BrowserSync is a Manifest V3 Chromium extension that mirrors open HTTP/HTTPS tabs
