@@ -14,6 +14,16 @@ export interface SyncedTab {
   position: number;
 }
 
+export interface SyncedBookmark {
+  title: string;
+  url?: string;
+  children?: SyncedBookmark[];
+}
+
+export interface BookmarkSnapshot {
+  roots: SyncedBookmark[][];
+}
+
 interface OperationBase {
   id: string;
   deviceId: string;
@@ -30,7 +40,15 @@ export interface RemoveOperation extends OperationBase {
   tabId: string;
 }
 
-export type SyncOperation = UpsertOperation | RemoveOperation;
+export interface BookmarkSnapshotOperation extends OperationBase {
+  type: "bookmark-snapshot";
+  snapshot: BookmarkSnapshot;
+}
+
+export type SyncOperation =
+  | UpsertOperation
+  | RemoveOperation
+  | BookmarkSnapshotOperation;
 
 export interface OperationBatch {
   schemaVersion: 1;
@@ -46,6 +64,11 @@ export interface CanonicalEntry {
 
 export type CanonicalState = Record<string, CanonicalEntry>;
 
+export interface CanonicalBookmarks {
+  clock: Clock;
+  snapshot: BookmarkSnapshot;
+}
+
 export interface SyncStatus {
   connected: boolean;
   enabled: boolean;
@@ -53,6 +76,8 @@ export interface SyncStatus {
   lastSyncAt?: number;
   error?: string;
   tabCount: number;
+  bookmarkCount: number;
+  bookmarksEnabled: boolean;
   deviceId: string;
 }
 
@@ -62,6 +87,7 @@ export type RuntimeRequest =
   | { type: "enable" }
   | { type: "disable" }
   | { type: "sync-now" }
+  | { type: "set-bookmarks-enabled"; enabled: boolean }
   | { type: "disconnect" };
 
 export type RuntimeResponse =

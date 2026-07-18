@@ -1,6 +1,7 @@
 import { forgetAccessToken, getAccessToken } from "./auth";
 import {
   enqueueOperations,
+  getCanonicalBookmarks,
   getCanonicalState,
   getDeviceId,
   getLastClock,
@@ -14,6 +15,7 @@ import {
   replaceMappings,
   resetRemoteState,
   setCanonicalState,
+  setCanonicalBookmarks,
   setEnabled,
   setLastClock,
   setMeta,
@@ -27,20 +29,35 @@ import {
 } from "./drive";
 import type {
   CanonicalState,
+  BookmarkSnapshot,
   Clock,
   RuntimeResponse,
   SyncOperation,
   SyncStatus,
   SyncedTab,
 } from "./model";
-import { activeTabs, applyOperations, compareClocks, maxClock } from "./reducer";
+import {
+  activeTabs,
+  applyBookmarkOperations,
+  applyOperations,
+  compareClocks,
+  maxClock,
+} from "./reducer";
 import { querySupportedTabs, reconcileTabs } from "./tabs";
+import {
+  bookmarkCount,
+  captureBookmarks,
+  reconcileBookmarks,
+  sameBookmarkSnapshot,
+} from "./bookmarks";
 
 const SYNC_ALARM = "tabsync-poll";
 
 class SyncEngine {
   private syncing = false;
   private active = false;
+  private bookmarksActive = false;
+  private applyingBookmarks = false;
   private lastError: string | undefined;
   private dirty = false;
   private localRevision = 0;
@@ -65,8 +82,15 @@ class SyncEngine {
     }, 700);
   }
 
+  noteBookmarkChange(): void {
+    if (!this.bookmarksActive || this.applyingBookmarks) return;
+    this.noteLocalChange();
+  }
+
   async startup(): Promise<void> {
     this.active = await isEnabled();
+    const { bookmarksEnabled } = await chrome.storage.local.get("bookmarksEnabled");
+    this.bookmarksActive = this.active && bookmarksEnabled === true;
     if (!this.active) {
       await chrome.alarms.clear(SYNC_ALARM);
       return;
@@ -85,6 +109,8 @@ class SyncEngine {
     await getAccessToken(false);
     await setEnabled(true);
     this.active = true;
+    const { bookmarksEnabled } = await chrome.storage.local.get("bookmarksEnabled");
+    this.bookmarksActive = bookmarksEnabled === true;
     await this.ensureAlarm();
     await this.runQueued(async () => {
       await this.pullRemote();
@@ -102,6 +128,7 @@ class SyncEngine {
   async disable(): Promise<void> {
     await setEnabled(false);
     this.active = false;
+    this.bookmarksActive = false;
     await chrome.alarms.clear(SYNC_ALARM);
   }
 
@@ -109,6 +136,7 @@ class SyncEngine {
     await forgetAccessToken();
     await resetRemoteState();
     this.active = false;
+    this.bookmarksActive = false;
     await chrome.alarms.clear(SYNC_ALARM);
     this.lastError = undefined;
   }
@@ -118,16 +146,43 @@ class SyncEngine {
     await this.runQueued(() => this.sync(this.dirty));
   }
 
+  async setBookmarksEnabled(enabled: boolean): Promise<void> {
+    await chrome.storage.local.set({ bookmarksEnabled: enabled });
+    this.bookmarksActive = enabled && (await isEnabled());
+    if (!this.bookmarksActive) return;
+
+    await this.runQueued(async () => {
+      await this.pullRemote();
+      const remote = await getCanonicalBookmarks();
+      if (remote) {
+        await this.applyRemoteBookmarks(remote.snapshot);
+      } else {
+        await this.captureBookmarkChanges();
+        await this.flushOutbox();
+      }
+      await this.recordLastSync();
+    });
+  }
+
   async status(): Promise<SyncStatus> {
-    const [settings, tabs] = await Promise.all([
-      chrome.storage.local.get(["connected", "enabled", "lastSyncAt", "deviceId"]),
+    const [settings, tabs, bookmarks] = await Promise.all([
+      chrome.storage.local.get([
+        "connected",
+        "enabled",
+        "bookmarksEnabled",
+        "lastSyncAt",
+        "deviceId",
+      ]),
       querySupportedTabs(),
+      captureBookmarks(),
     ]);
     const status: SyncStatus = {
       connected: settings.connected === true,
       enabled: settings.enabled === true,
       syncing: this.syncing,
       tabCount: tabs.length,
+      bookmarkCount: bookmarkCount(bookmarks),
+      bookmarksEnabled: settings.bookmarksEnabled === true,
       deviceId:
         typeof settings.deviceId === "string" ? settings.deviceId : "not-initialized",
     };
@@ -166,6 +221,8 @@ class SyncEngine {
         enabled: false,
         syncing: this.syncing,
         tabCount: 0,
+        bookmarkCount: 0,
+        bookmarksEnabled: false,
         deviceId: "unavailable",
         error: combinedError,
       };
@@ -339,6 +396,27 @@ class SyncEngine {
       await setCanonicalState(applyOperations(canonical, operations));
     }
     await replaceMappings(mappings);
+    if (this.bookmarksActive) await this.captureBookmarkChanges();
+  }
+
+  private async captureBookmarkChanges(): Promise<void> {
+    const [snapshot, current] = await Promise.all([
+      captureBookmarks(),
+      getCanonicalBookmarks(),
+    ]);
+    if (current && sameBookmarkSnapshot(snapshot, current.snapshot)) return;
+
+    const operation: SyncOperation = {
+      id: crypto.randomUUID(),
+      deviceId: await getDeviceId(),
+      clock: await this.nextClock(),
+      type: "bookmark-snapshot",
+      snapshot,
+    };
+    await Promise.all([
+      enqueueOperations([operation]),
+      setCanonicalBookmarks({ clock: operation.clock, snapshot }),
+    ]);
   }
 
   private async flushOutbox(): Promise<void> {
@@ -364,18 +442,28 @@ class SyncEngine {
     }
 
     let canonical = await getCanonicalState();
+    let canonicalBookmarks = await getCanonicalBookmarks();
     if (files.length > 0) await setMeta("cloudInitialized", true);
     for (const file of files) {
       if (await hasSeenFile(file.id)) continue;
       const batch = await downloadOperationBatch(file.id);
       canonical = applyOperations(canonical, batch.operations);
+      canonicalBookmarks = applyBookmarkOperations(canonicalBookmarks, batch.operations);
       await markFileSeen(file.id);
     }
 
-    const remoteMaxClock = maxClock(canonical);
+    const tabClock = maxClock(canonical);
+    const bookmarkClock = canonicalBookmarks?.clock;
+    const remoteMaxClock =
+      tabClock && bookmarkClock
+        ? compareClocks(tabClock, bookmarkClock) >= 0
+          ? tabClock
+          : bookmarkClock
+        : tabClock ?? bookmarkClock;
     const localClock = await getLastClock();
     await Promise.all([
       setCanonicalState(canonical),
+      setCanonicalBookmarks(canonicalBookmarks),
       setMeta("changeToken", nextToken),
       remoteMaxClock && (!localClock || compareClocks(remoteMaxClock, localClock) > 0)
         ? setLastClock(remoteMaxClock)
@@ -386,6 +474,19 @@ class SyncEngine {
   private async applyRemoteState(canonical: CanonicalState): Promise<void> {
     const mappings = await reconcileTabs(activeTabs(canonical), await getMappings());
     await replaceMappings(mappings);
+    if (this.bookmarksActive) {
+      const bookmarks = await getCanonicalBookmarks();
+      if (bookmarks) await this.applyRemoteBookmarks(bookmarks.snapshot);
+    }
+  }
+
+  private async applyRemoteBookmarks(snapshot: BookmarkSnapshot): Promise<void> {
+    this.applyingBookmarks = true;
+    try {
+      await reconcileBookmarks(snapshot);
+    } finally {
+      this.applyingBookmarks = false;
+    }
   }
 }
 

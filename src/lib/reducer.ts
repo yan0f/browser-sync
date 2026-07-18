@@ -1,5 +1,6 @@
 import type {
   CanonicalState,
+  CanonicalBookmarks,
   Clock,
   SyncOperation,
   SyncedTab,
@@ -22,6 +23,7 @@ export function applyOperations(
   const state = { ...initial };
 
   for (const operation of operations) {
+    if (operation.type === "bookmark-snapshot") continue;
     const tabId = operation.type === "upsert" ? operation.tab.id : operation.tabId;
     const current = state[tabId];
     if (current && compareClocks(operation.clock, current.clock) <= 0) {
@@ -34,6 +36,19 @@ export function applyOperations(
     };
   }
 
+  return state;
+}
+
+export function applyBookmarkOperations(
+  initial: CanonicalBookmarks | undefined,
+  operations: readonly SyncOperation[],
+): CanonicalBookmarks | undefined {
+  let state = initial;
+  for (const operation of operations) {
+    if (operation.type !== "bookmark-snapshot") continue;
+    if (state && compareClocks(operation.clock, state.clock) <= 0) continue;
+    state = { clock: operation.clock, snapshot: operation.snapshot };
+  }
   return state;
 }
 

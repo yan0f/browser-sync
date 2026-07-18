@@ -13,8 +13,8 @@ export default defineConfig({
   srcDir: "src",
   manifest: {
     name: "TabSync",
-    description: "Mirror open tabs between Chromium browsers through Google Drive.",
-    permissions: ["tabs", "identity", "storage", "alarms"],
+    description: "Synchronize tabs and bookmarks through Google Drive.",
+    permissions: ["tabs", "bookmarks", "identity", "storage", "alarms"],
     host_permissions: ["https://www.googleapis.com/*"],
     oauth2: {
       client_id:

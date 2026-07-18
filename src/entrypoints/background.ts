@@ -13,6 +13,12 @@ export default defineBackground(() => {
     }
   });
 
+  const noteBookmarkChange = () => syncEngine.noteBookmarkChange();
+  chrome.bookmarks.onCreated.addListener(noteBookmarkChange);
+  chrome.bookmarks.onRemoved.addListener(noteBookmarkChange);
+  chrome.bookmarks.onChanged.addListener(noteBookmarkChange);
+  chrome.bookmarks.onMoved.addListener(noteBookmarkChange);
+
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === SYNC_ALARM) {
       void syncEngine.syncNow().catch(() => undefined);
@@ -36,6 +42,10 @@ export default defineBackground(() => {
             return syncEngine.respond(() => syncEngine.disable());
           case "sync-now":
             return syncEngine.respond(() => syncEngine.syncNow());
+          case "set-bookmarks-enabled":
+            return syncEngine.respond(() =>
+              syncEngine.setBookmarksEnabled(request.enabled),
+            );
           case "disconnect":
             return syncEngine.respond(() => syncEngine.disconnect());
         }

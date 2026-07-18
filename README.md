@@ -1,7 +1,7 @@
 # TabSync
 
 TabSync is a Manifest V3 Chromium extension that mirrors open HTTP/HTTPS tabs
-between browser installations. Synchronization data is stored in the signed-in
+and, optionally, all bookmarks between browser installations. Synchronization data is stored in the signed-in
 user's hidden Google Drive `appDataFolder`; no application backend is required.
 
 ## Current MVP
@@ -11,6 +11,7 @@ user's hidden Google Drive `appDataFolder`; no application backend is required.
 - incremental polling through the Drive Changes API
 - local durable state and outbox in IndexedDB
 - create, navigate, close, pin and unpin synchronization
+- one-switch synchronization of the complete bookmarks tree
 - deterministic last-write-wins conflict resolution with tombstones
 - automatic polling every 30 seconds
 

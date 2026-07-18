@@ -1,5 +1,10 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import type { CanonicalState, Clock, SyncOperation } from "./model";
+import type {
+  CanonicalBookmarks,
+  CanonicalState,
+  Clock,
+  SyncOperation,
+} from "./model";
 
 interface TabSyncDatabase extends DBSchema {
   meta: {
@@ -86,6 +91,18 @@ export async function setCanonicalState(state: CanonicalState): Promise<void> {
   await setMeta("canonical", state);
 }
 
+export async function getCanonicalBookmarks(): Promise<CanonicalBookmarks | undefined> {
+  return getMeta<CanonicalBookmarks | undefined>("canonicalBookmarks", undefined);
+}
+
+export async function setCanonicalBookmarks(
+  state: CanonicalBookmarks | undefined,
+): Promise<void> {
+  const db = await database();
+  if (state === undefined) await db.delete("meta", "canonicalBookmarks");
+  else await db.put("meta", state, "canonicalBookmarks");
+}
+
 export async function getLastClock(): Promise<Clock | undefined> {
   return getMeta<Clock | undefined>("lastClock", undefined);
 }
@@ -151,6 +168,7 @@ export async function resetRemoteState(): Promise<void> {
     transaction.objectStore("outbox").clear(),
     transaction.objectStore("seenFiles").clear(),
     transaction.objectStore("meta").delete("canonical"),
+    transaction.objectStore("meta").delete("canonicalBookmarks"),
     transaction.objectStore("meta").delete("changeToken"),
     transaction.objectStore("meta").delete("lastClock"),
     transaction.objectStore("meta").delete("cloudInitialized"),

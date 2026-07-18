@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Clock, SyncOperation } from "./model";
-import { activeTabs, applyOperations, compareClocks } from "./reducer";
+import {
+  activeTabs,
+  applyBookmarkOperations,
+  applyOperations,
+  compareClocks,
+} from "./reducer";
 
 const clock = (wallTime: number, counter = 0, node = "a"): Clock => ({
   wallTime,
@@ -52,5 +57,44 @@ describe("canonical reducer", () => {
 
   it("uses node id as a deterministic tie breaker", () => {
     expect(compareClocks(clock(10, 0, "a"), clock(10, 0, "b"))).toBeLessThan(0);
+  });
+
+  it("keeps bookmark snapshots separate from tab state", () => {
+    const operation: SyncOperation = {
+      id: "op-bookmarks",
+      deviceId: "a",
+      clock: clock(12),
+      type: "bookmark-snapshot",
+      snapshot: {
+        roots: [[{ title: "Example", url: "https://example.com" }]],
+      },
+    };
+
+    expect(applyOperations({}, [operation])).toEqual({});
+    expect(applyBookmarkOperations(undefined, [operation])?.snapshot).toEqual(
+      operation.snapshot,
+    );
+  });
+
+  it("uses the newest complete bookmark snapshot", () => {
+    const older: SyncOperation = {
+      id: "old",
+      deviceId: "a",
+      clock: clock(12),
+      type: "bookmark-snapshot",
+      snapshot: { roots: [[{ title: "Old", url: "https://old.example" }]] },
+    };
+    const newer: SyncOperation = {
+      id: "new",
+      deviceId: "b",
+      clock: clock(13),
+      type: "bookmark-snapshot",
+      snapshot: { roots: [[{ title: "New", url: "https://new.example" }]] },
+    };
+
+    expect(
+      applyBookmarkOperations(undefined, [newer, older])?.snapshot.roots[0]?.[0]
+        ?.title,
+    ).toBe("New");
   });
 });

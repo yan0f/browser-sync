@@ -96,6 +96,26 @@ h1 {
   gap: 8px;
 }
 
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+  border: 1px solid #e2e7ee;
+  border-radius: 10px;
+  background: white;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.toggle-row input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #2563eb;
+}
+
 button {
   width: 100%;
   padding: 10px 14px;
