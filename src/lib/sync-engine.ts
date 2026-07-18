@@ -2,6 +2,7 @@ import { forgetAccessToken, getAccessToken } from "./auth";
 import {
   enqueueOperations,
   getCanonicalBookmarks,
+  getCanonicalHistory,
   getCanonicalState,
   getDeviceId,
   getLastClock,
@@ -16,6 +17,7 @@ import {
   resetRemoteState,
   setCanonicalState,
   setCanonicalBookmarks,
+  setCanonicalHistory,
   setEnabled,
   setLastClock,
   setMeta,
@@ -30,6 +32,7 @@ import {
 import type {
   CanonicalState,
   BookmarkSnapshot,
+  CanonicalHistory,
   Clock,
   RuntimeResponse,
   SyncOperation,
@@ -38,18 +41,23 @@ import type {
 } from "./model";
 import {
   activeTabs,
+  activeHistoryUrls,
   applyBookmarkOperations,
+  applyHistoryOperations,
   applyOperations,
   compareClocks,
   maxClock,
+  maxHistoryClock,
 } from "./reducer";
 import { querySupportedTabs, reconcileTabs } from "./tabs";
+import { isSupportedUrl } from "./tabs";
 import {
   bookmarkCount,
   captureBookmarks,
   reconcileBookmarks,
   sameBookmarkSnapshot,
 } from "./bookmarks";
+import { queryHistoryUrls, reconcileHistory } from "./history";
 
 const SYNC_ALARM = "tabsync-poll";
 
@@ -58,6 +66,12 @@ class SyncEngine {
   private active = false;
   private bookmarksActive = false;
   private applyingBookmarks = false;
+  private historyActive = false;
+  private applyingHistory = false;
+  private pendingHistoryAdded = new Set<string>();
+  private pendingHistoryRemoved = new Set<string>();
+  private pendingHistoryClear = false;
+  private pendingHistoryRevision = 0;
   private lastError: string | undefined;
   private dirty = false;
   private localRevision = 0;
@@ -87,10 +101,40 @@ class SyncEngine {
     this.noteLocalChange();
   }
 
+  noteHistoryVisited(item: chrome.history.HistoryItem): void {
+    if (!this.historyActive || this.applyingHistory) return;
+    if (!isSupportedUrl(item.url)) return;
+    this.pendingHistoryRemoved.delete(item.url);
+    this.pendingHistoryAdded.add(item.url);
+    this.pendingHistoryRevision += 1;
+    this.noteLocalChange();
+  }
+
+  noteHistoryRemoved(result: chrome.history.RemovedResult): void {
+    if (!this.historyActive || this.applyingHistory) return;
+    if (result.allHistory) {
+      this.pendingHistoryClear = true;
+      this.pendingHistoryAdded.clear();
+      this.pendingHistoryRemoved.clear();
+    } else {
+      for (const url of result.urls ?? []) {
+        if (!isSupportedUrl(url)) continue;
+        this.pendingHistoryAdded.delete(url);
+        this.pendingHistoryRemoved.add(url);
+      }
+    }
+    this.pendingHistoryRevision += 1;
+    this.noteLocalChange();
+  }
+
   async startup(): Promise<void> {
     this.active = await isEnabled();
-    const { bookmarksEnabled } = await chrome.storage.local.get("bookmarksEnabled");
+    const { bookmarksEnabled, historyEnabled } = await chrome.storage.local.get([
+      "bookmarksEnabled",
+      "historyEnabled",
+    ]);
     this.bookmarksActive = this.active && bookmarksEnabled === true;
+    this.historyActive = this.active && historyEnabled === true;
     if (!this.active) {
       await chrome.alarms.clear(SYNC_ALARM);
       return;
@@ -109,8 +153,12 @@ class SyncEngine {
     await getAccessToken(false);
     await setEnabled(true);
     this.active = true;
-    const { bookmarksEnabled } = await chrome.storage.local.get("bookmarksEnabled");
+    const { bookmarksEnabled, historyEnabled } = await chrome.storage.local.get([
+      "bookmarksEnabled",
+      "historyEnabled",
+    ]);
     this.bookmarksActive = bookmarksEnabled === true;
+    this.historyActive = historyEnabled === true;
     await this.ensureAlarm();
     await this.runQueued(async () => {
       await this.pullRemote();
@@ -129,6 +177,7 @@ class SyncEngine {
     await setEnabled(false);
     this.active = false;
     this.bookmarksActive = false;
+    this.historyActive = false;
     await chrome.alarms.clear(SYNC_ALARM);
   }
 
@@ -137,6 +186,7 @@ class SyncEngine {
     await resetRemoteState();
     this.active = false;
     this.bookmarksActive = false;
+    this.historyActive = false;
     await chrome.alarms.clear(SYNC_ALARM);
     this.lastError = undefined;
   }
@@ -164,17 +214,39 @@ class SyncEngine {
     });
   }
 
+  async setHistoryEnabled(enabled: boolean): Promise<void> {
+    await chrome.storage.local.set({ historyEnabled: enabled });
+    this.historyActive = enabled && (await isEnabled());
+    if (!this.historyActive) return;
+
+    await this.runQueued(async () => {
+      await this.pullRemote();
+      const remote = await getCanonicalHistory();
+      if (remote !== undefined) {
+        await this.applyRemoteHistory(remote);
+      } else {
+        await this.captureHistoryChanges();
+        await this.flushOutbox();
+      }
+      await this.recordLastSync();
+    });
+  }
+
   async status(): Promise<SyncStatus> {
-    const [settings, tabs, bookmarks] = await Promise.all([
-      chrome.storage.local.get([
-        "connected",
-        "enabled",
-        "bookmarksEnabled",
-        "lastSyncAt",
-        "deviceId",
-      ]),
+    const settings = await chrome.storage.local.get([
+      "connected",
+      "enabled",
+      "bookmarksEnabled",
+      "historyEnabled",
+      "lastSyncAt",
+      "deviceId",
+    ]);
+    const [tabs, bookmarks, history] = await Promise.all([
       querySupportedTabs(),
       captureBookmarks(),
+      settings.historyEnabled === true
+        ? queryHistoryUrls()
+        : Promise.resolve(new Set<string>()),
     ]);
     const status: SyncStatus = {
       connected: settings.connected === true,
@@ -183,6 +255,8 @@ class SyncEngine {
       tabCount: tabs.length,
       bookmarkCount: bookmarkCount(bookmarks),
       bookmarksEnabled: settings.bookmarksEnabled === true,
+      historyCount: history.size,
+      historyEnabled: settings.historyEnabled === true,
       deviceId:
         typeof settings.deviceId === "string" ? settings.deviceId : "not-initialized",
     };
@@ -223,6 +297,8 @@ class SyncEngine {
         tabCount: 0,
         bookmarkCount: 0,
         bookmarksEnabled: false,
+        historyCount: 0,
+        historyEnabled: false,
         deviceId: "unavailable",
         error: combinedError,
       };
@@ -397,6 +473,7 @@ class SyncEngine {
     }
     await replaceMappings(mappings);
     if (this.bookmarksActive) await this.captureBookmarkChanges();
+    if (this.historyActive) await this.captureHistoryChanges();
   }
 
   private async captureBookmarkChanges(): Promise<void> {
@@ -417,6 +494,41 @@ class SyncEngine {
       enqueueOperations([operation]),
       setCanonicalBookmarks({ clock: operation.clock, snapshot }),
     ]);
+  }
+
+  private async captureHistoryChanges(): Promise<void> {
+    const current = await getCanonicalHistory();
+    const revision = this.pendingHistoryRevision;
+    const clear = this.pendingHistoryClear;
+    const added = [...this.pendingHistoryAdded];
+    const removed = [...this.pendingHistoryRemoved];
+    if (
+      current !== undefined &&
+      !clear &&
+      added.length === 0 &&
+      removed.length === 0
+    ) {
+      return;
+    }
+
+    const operation: SyncOperation = {
+      id: crypto.randomUUID(),
+      deviceId: await getDeviceId(),
+      clock: await this.nextClock(),
+      type: "history-delta-v2",
+      added,
+      removed,
+      ...(clear ? { clear: true } : {}),
+    };
+    await Promise.all([
+      enqueueOperations([operation]),
+      setCanonicalHistory(applyHistoryOperations(current, [operation])),
+    ]);
+    if (revision === this.pendingHistoryRevision) {
+      this.pendingHistoryAdded.clear();
+      this.pendingHistoryRemoved.clear();
+      this.pendingHistoryClear = false;
+    }
   }
 
   private async flushOutbox(): Promise<void> {
@@ -443,27 +555,39 @@ class SyncEngine {
 
     let canonical = await getCanonicalState();
     let canonicalBookmarks = await getCanonicalBookmarks();
+    let canonicalHistory = await getCanonicalHistory();
     if (files.length > 0) await setMeta("cloudInitialized", true);
     for (const file of files) {
       if (await hasSeenFile(file.id)) continue;
       const batch = await downloadOperationBatch(file.id);
       canonical = applyOperations(canonical, batch.operations);
       canonicalBookmarks = applyBookmarkOperations(canonicalBookmarks, batch.operations);
+      canonicalHistory = applyHistoryOperations(canonicalHistory, batch.operations);
       await markFileSeen(file.id);
     }
 
     const tabClock = maxClock(canonical);
     const bookmarkClock = canonicalBookmarks?.clock;
-    const remoteMaxClock =
+    const historyClock = canonicalHistory
+      ? maxHistoryClock(canonicalHistory)
+      : undefined;
+    let remoteMaxClock =
       tabClock && bookmarkClock
         ? compareClocks(tabClock, bookmarkClock) >= 0
           ? tabClock
           : bookmarkClock
         : tabClock ?? bookmarkClock;
+    if (
+      historyClock &&
+      (!remoteMaxClock || compareClocks(historyClock, remoteMaxClock) > 0)
+    ) {
+      remoteMaxClock = historyClock;
+    }
     const localClock = await getLastClock();
     await Promise.all([
       setCanonicalState(canonical),
       setCanonicalBookmarks(canonicalBookmarks),
+      setCanonicalHistory(canonicalHistory),
       setMeta("changeToken", nextToken),
       remoteMaxClock && (!localClock || compareClocks(remoteMaxClock, localClock) > 0)
         ? setLastClock(remoteMaxClock)
@@ -478,6 +602,10 @@ class SyncEngine {
       const bookmarks = await getCanonicalBookmarks();
       if (bookmarks) await this.applyRemoteBookmarks(bookmarks.snapshot);
     }
+    if (this.historyActive) {
+      const history = await getCanonicalHistory();
+      if (history !== undefined) await this.applyRemoteHistory(history);
+    }
   }
 
   private async applyRemoteBookmarks(snapshot: BookmarkSnapshot): Promise<void> {
@@ -486,6 +614,18 @@ class SyncEngine {
       await reconcileBookmarks(snapshot);
     } finally {
       this.applyingBookmarks = false;
+    }
+  }
+
+  private async applyRemoteHistory(history: CanonicalHistory): Promise<void> {
+    this.applyingHistory = true;
+    try {
+      const removed = Object.entries(history)
+        .filter(([, entry]) => !entry.present)
+        .map(([url]) => url);
+      await reconcileHistory(activeHistoryUrls(history), removed);
+    } finally {
+      this.applyingHistory = false;
     }
   }
 }

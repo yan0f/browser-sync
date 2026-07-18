@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Clock, SyncOperation } from "./model";
 import {
   activeTabs,
+  activeHistoryUrls,
   applyBookmarkOperations,
+  applyHistoryOperations,
   applyOperations,
   compareClocks,
 } from "./reducer";
@@ -96,5 +98,88 @@ describe("canonical reducer", () => {
       applyBookmarkOperations(undefined, [newer, older])?.snapshot.roots[0]?.[0]
         ?.title,
     ).toBe("New");
+  });
+
+  it("merges independent history changes without replacing the whole history", () => {
+    const first: SyncOperation = {
+      id: "history-a",
+      deviceId: "a",
+      clock: clock(20),
+      type: "history-delta-v2",
+      added: ["https://a.example"],
+      removed: [],
+    };
+    const second: SyncOperation = {
+      id: "history-b",
+      deviceId: "b",
+      clock: clock(21),
+      type: "history-delta-v2",
+      added: ["https://b.example"],
+      removed: [],
+    };
+
+    const state = applyHistoryOperations(undefined, [second, first]);
+    expect(activeHistoryUrls(state!)).toEqual([
+      "https://a.example",
+      "https://b.example",
+    ]);
+  });
+
+  it("keeps the latest add or removal for each history URL", () => {
+    const add: SyncOperation = {
+      id: "history-add",
+      deviceId: "a",
+      clock: clock(30),
+      type: "history-delta-v2",
+      added: ["https://example.com"],
+      removed: [],
+    };
+    const remove: SyncOperation = {
+      id: "history-remove",
+      deviceId: "b",
+      clock: clock(31),
+      type: "history-delta-v2",
+      added: [],
+      removed: ["https://example.com"],
+    };
+
+    const state = applyHistoryOperations(undefined, [remove, add]);
+    expect(activeHistoryUrls(state!)).toEqual([]);
+  });
+
+  it("ignores the legacy history snapshot format", () => {
+    const legacy: SyncOperation = {
+      id: "legacy-history",
+      deviceId: "a",
+      clock: clock(40),
+      type: "history-delta",
+      added: ["https://legacy.example"],
+      removed: [],
+    };
+
+    expect(applyHistoryOperations(undefined, [legacy])).toBeUndefined();
+  });
+
+  it("adds a new visit after synchronized history was cleared", () => {
+    const initial: SyncOperation = {
+      id: "initial-history",
+      deviceId: "a",
+      clock: clock(50),
+      type: "history-delta-v2",
+      added: ["https://old.example"],
+      removed: [],
+    };
+    const clearAndAdd: SyncOperation = {
+      id: "clear-history",
+      deviceId: "a",
+      clock: clock(51),
+      type: "history-delta-v2",
+      clear: true,
+      added: ["https://new.example"],
+      removed: [],
+    };
+
+    const state = applyHistoryOperations(undefined, [initial, clearAndAdd]);
+    expect(activeHistoryUrls(state!)).toEqual(["https://new.example"]);
   });
 });

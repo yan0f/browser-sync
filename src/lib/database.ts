@@ -1,6 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import type {
   CanonicalBookmarks,
+  CanonicalHistory,
   CanonicalState,
   Clock,
   SyncOperation,
@@ -103,6 +104,18 @@ export async function setCanonicalBookmarks(
   else await db.put("meta", state, "canonicalBookmarks");
 }
 
+export async function getCanonicalHistory(): Promise<CanonicalHistory | undefined> {
+  return getMeta<CanonicalHistory | undefined>("canonicalHistoryV2", undefined);
+}
+
+export async function setCanonicalHistory(
+  state: CanonicalHistory | undefined,
+): Promise<void> {
+  const db = await database();
+  if (state === undefined) await db.delete("meta", "canonicalHistoryV2");
+  else await db.put("meta", state, "canonicalHistoryV2");
+}
+
 export async function getLastClock(): Promise<Clock | undefined> {
   return getMeta<Clock | undefined>("lastClock", undefined);
 }
@@ -169,6 +182,8 @@ export async function resetRemoteState(): Promise<void> {
     transaction.objectStore("seenFiles").clear(),
     transaction.objectStore("meta").delete("canonical"),
     transaction.objectStore("meta").delete("canonicalBookmarks"),
+    transaction.objectStore("meta").delete("canonicalHistory"),
+    transaction.objectStore("meta").delete("canonicalHistoryV2"),
     transaction.objectStore("meta").delete("changeToken"),
     transaction.objectStore("meta").delete("lastClock"),
     transaction.objectStore("meta").delete("cloudInitialized"),

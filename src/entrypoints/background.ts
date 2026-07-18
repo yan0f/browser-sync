@@ -19,6 +19,11 @@ export default defineBackground(() => {
   chrome.bookmarks.onChanged.addListener(noteBookmarkChange);
   chrome.bookmarks.onMoved.addListener(noteBookmarkChange);
 
+  chrome.history.onVisited.addListener((item) => syncEngine.noteHistoryVisited(item));
+  chrome.history.onVisitRemoved.addListener((result) =>
+    syncEngine.noteHistoryRemoved(result),
+  );
+
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === SYNC_ALARM) {
       void syncEngine.syncNow().catch(() => undefined);
@@ -45,6 +50,10 @@ export default defineBackground(() => {
           case "set-bookmarks-enabled":
             return syncEngine.respond(() =>
               syncEngine.setBookmarksEnabled(request.enabled),
+            );
+          case "set-history-enabled":
+            return syncEngine.respond(() =>
+              syncEngine.setHistoryEnabled(request.enabled),
             );
           case "disconnect":
             return syncEngine.respond(() => syncEngine.disconnect());

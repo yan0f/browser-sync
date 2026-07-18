@@ -5,6 +5,7 @@ const summary = document.querySelector<HTMLParagraphElement>("#summary")!;
 const details = document.querySelector<HTMLElement>("#details")!;
 const tabCount = document.querySelector<HTMLElement>("#tab-count")!;
 const bookmarkCount = document.querySelector<HTMLElement>("#bookmark-count")!;
+const historyCount = document.querySelector<HTMLElement>("#history-count")!;
 const lastSync = document.querySelector<HTMLElement>("#last-sync")!;
 const warning = document.querySelector<HTMLParagraphElement>("#warning")!;
 const errorBox = document.querySelector<HTMLParagraphElement>("#error")!;
@@ -16,6 +17,7 @@ const REQUEST_TIMEOUTS: Record<RuntimeRequest["type"], number> = {
   enable: 60_000,
   "sync-now": 60_000,
   "set-bookmarks-enabled": 60_000,
+  "set-history-enabled": 60_000,
   disable: 10_000,
   disconnect: 15_000,
 };
@@ -62,23 +64,24 @@ function button(label: string, type: RuntimeRequest["type"], secondary = false):
   return element;
 }
 
-function bookmarkToggle(status: SyncStatus): HTMLLabelElement {
+function settingToggle(
+  labelText: string,
+  checked: boolean,
+  requestFor: (enabled: boolean) => RuntimeRequest,
+): HTMLLabelElement {
   const label = document.createElement("label");
   label.className = "toggle-row";
 
   const text = document.createElement("span");
-  text.textContent = "Синхронизировать все закладки";
+  text.textContent = labelText;
   const input = document.createElement("input");
   input.type = "checkbox";
-  input.checked = status.bookmarksEnabled;
+  input.checked = checked;
   input.addEventListener("change", async () => {
     setBusy(true);
     input.disabled = true;
     try {
-      const response = await request({
-        type: "set-bookmarks-enabled",
-        enabled: input.checked,
-      });
+      const response = await request(requestFor(input.checked));
       render(response.status, response.ok ? undefined : response.error);
     } catch (error) {
       renderFatal(error);
@@ -101,8 +104,8 @@ function renderFatal(error: unknown): void {
 }
 
 function setBusy(busy: boolean): void {
-  for (const element of actions.querySelectorAll("button")) {
-    (element as HTMLButtonElement).disabled = busy;
+  for (const element of actions.querySelectorAll("button, input")) {
+    (element as HTMLButtonElement | HTMLInputElement).disabled = busy;
   }
   if (busy) summary.textContent = "Выполняется…";
 }
@@ -115,6 +118,7 @@ function render(status: SyncStatus, explicitError?: string): void {
 
   tabCount.textContent = String(status.tabCount);
   bookmarkCount.textContent = String(status.bookmarkCount);
+  historyCount.textContent = status.historyEnabled ? String(status.historyCount) : "—";
   lastSync.textContent = status.lastSyncAt
     ? new Intl.DateTimeFormat("ru", { hour: "2-digit", minute: "2-digit" }).format(
         status.lastSyncAt,
@@ -146,7 +150,18 @@ function render(status: SyncStatus, explicitError?: string): void {
   }
 
   summary.textContent = status.syncing ? "Синхронизация…" : "Синхронизация включена";
-  actions.append(bookmarkToggle(status));
+  actions.append(
+    settingToggle(
+      "Синхронизировать все закладки",
+      status.bookmarksEnabled,
+      (enabled) => ({ type: "set-bookmarks-enabled", enabled }),
+    ),
+    settingToggle(
+      "Синхронизировать новые посещения",
+      status.historyEnabled,
+      (enabled) => ({ type: "set-history-enabled", enabled }),
+    ),
+  );
   actions.append(
     button("Синхронизировать сейчас", "sync-now"),
     button("Приостановить", "disable", true),

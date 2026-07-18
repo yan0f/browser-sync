@@ -45,10 +45,25 @@ export interface BookmarkSnapshotOperation extends OperationBase {
   snapshot: BookmarkSnapshot;
 }
 
+export interface LegacyHistoryDeltaOperation extends OperationBase {
+  type: "history-delta";
+  added: string[];
+  removed: string[];
+}
+
+export interface HistoryDeltaV2Operation extends OperationBase {
+  type: "history-delta-v2";
+  added: string[];
+  removed: string[];
+  clear?: boolean;
+}
+
 export type SyncOperation =
   | UpsertOperation
   | RemoveOperation
-  | BookmarkSnapshotOperation;
+  | BookmarkSnapshotOperation
+  | LegacyHistoryDeltaOperation
+  | HistoryDeltaV2Operation;
 
 export interface OperationBatch {
   schemaVersion: 1;
@@ -69,6 +84,13 @@ export interface CanonicalBookmarks {
   snapshot: BookmarkSnapshot;
 }
 
+export interface CanonicalHistoryEntry {
+  clock: Clock;
+  present: boolean;
+}
+
+export type CanonicalHistory = Record<string, CanonicalHistoryEntry>;
+
 export interface SyncStatus {
   connected: boolean;
   enabled: boolean;
@@ -78,6 +100,8 @@ export interface SyncStatus {
   tabCount: number;
   bookmarkCount: number;
   bookmarksEnabled: boolean;
+  historyCount: number;
+  historyEnabled: boolean;
   deviceId: string;
 }
 
@@ -88,6 +112,7 @@ export type RuntimeRequest =
   | { type: "disable" }
   | { type: "sync-now" }
   | { type: "set-bookmarks-enabled"; enabled: boolean }
+  | { type: "set-history-enabled"; enabled: boolean }
   | { type: "disconnect" };
 
 export type RuntimeResponse =

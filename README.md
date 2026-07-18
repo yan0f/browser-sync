@@ -1,7 +1,8 @@
 # TabSync
 
 TabSync is a Manifest V3 Chromium extension that mirrors open HTTP/HTTPS tabs
-and, optionally, all bookmarks between browser installations. Synchronization data is stored in the signed-in
+and, optionally, all bookmarks and visited HTTP/HTTPS addresses between browser
+installations. Synchronization data is stored in the signed-in
 user's hidden Google Drive `appDataFolder`; no application backend is required.
 
 ## Current MVP
@@ -12,14 +13,21 @@ user's hidden Google Drive `appDataFolder`; no application backend is required.
 - local durable state and outbox in IndexedDB
 - create, navigate, close, pin and unpin synchronization
 - one-switch synchronization of the complete bookmarks tree
+- one-switch synchronization of new HTTP/HTTPS addresses visited after opt-in
 - deterministic last-write-wins conflict resolution with tombstones
 - automatic polling every 30 seconds
 
 Incognito tabs, browser-internal pages, extension pages and `file://` URLs are
-not synchronized. Window layout, tab groups, active tab and browsing history are
-not part of the MVP. Tab ordering across multiple windows is intentionally not
+not synchronized. Window layout, tab groups and active tab are not part of the
+MVP. Tab ordering across multiple windows is intentionally not
 synchronized yet because Chromium indexes are scoped to a window rather than a
 browser profile.
+
+Chromium only allows extensions to add a history URL at the current time. The
+original visit timestamps, titles, transition types and visit counts therefore
+cannot be reproduced on another installation. Existing local history is never
+uploaded or replaced when history synchronization is enabled; only subsequent
+visits and explicit removals are propagated.
 
 ## Google Cloud setup
 
