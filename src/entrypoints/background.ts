@@ -3,15 +3,26 @@ import type { RuntimeRequest, RuntimeResponse } from "../lib/model";
 import { SYNC_ALARM, syncEngine } from "../lib/sync-engine";
 
 export default defineBackground(() => {
-  const noteLocalChange = () => syncEngine.noteLocalChange();
+  const noteLocalChange = (source: string) => () =>
+    syncEngine.noteLocalChange(source);
 
-  chrome.tabs.onCreated.addListener(noteLocalChange);
-  chrome.tabs.onRemoved.addListener(noteLocalChange);
-  chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
-    if (changeInfo.url !== undefined || changeInfo.pinned !== undefined) {
-      noteLocalChange();
+  chrome.tabs.onCreated.addListener(noteLocalChange("tabs.created"));
+  chrome.tabs.onRemoved.addListener(noteLocalChange("tabs.removed"));
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.groupId !== undefined) {
+      syncEngine.noteTabGroupChange(tabId);
+    } else if (
+      changeInfo.url !== undefined ||
+      changeInfo.pinned !== undefined
+    ) {
+      syncEngine.noteLocalChange("tabs.updated");
     }
   });
+
+  chrome.tabGroups.onCreated.addListener(noteLocalChange("groups.created"));
+  chrome.tabGroups.onRemoved.addListener(noteLocalChange("groups.removed"));
+  chrome.tabGroups.onUpdated.addListener(noteLocalChange("groups.updated"));
+  chrome.tabGroups.onMoved.addListener(noteLocalChange("groups.moved"));
 
   const noteBookmarkChange = () => syncEngine.noteBookmarkChange();
   chrome.bookmarks.onCreated.addListener(noteBookmarkChange);
@@ -26,7 +37,7 @@ export default defineBackground(() => {
 
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === SYNC_ALARM) {
-      void syncEngine.syncNow().catch(() => undefined);
+      void syncEngine.syncNow(false).catch(() => undefined);
     }
   });
 

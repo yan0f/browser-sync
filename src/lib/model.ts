@@ -12,6 +12,25 @@ export interface SyncedTab {
   url: string;
   pinned: boolean;
   position: number;
+  group?: SyncedTabGroup;
+}
+
+export type SyncedTabGroupColor =
+  | "grey"
+  | "blue"
+  | "red"
+  | "yellow"
+  | "green"
+  | "pink"
+  | "purple"
+  | "cyan"
+  | "orange";
+
+export interface SyncedTabGroup {
+  id: string;
+  color: SyncedTabGroupColor;
+  collapsed: boolean;
+  title?: string;
 }
 
 export interface SyncedBookmark {

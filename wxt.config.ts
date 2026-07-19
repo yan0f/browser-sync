@@ -13,14 +13,22 @@ export default defineConfig({
   srcDir: "src",
   manifest: {
     name: "BrowserSync",
-    description: "Synchronize tabs, bookmarks and history through Google Drive.",
+    description: "Synchronize tabs, tab groups, bookmarks and history through Google Drive.",
     icons: {
       16: "icons/icon-16.png",
       32: "icons/icon-32.png",
       48: "icons/icon-48.png",
       128: "icons/icon-128.png",
     },
-    permissions: ["tabs", "bookmarks", "history", "identity", "storage", "alarms"],
+    permissions: [
+      "tabs",
+      "tabGroups",
+      "bookmarks",
+      "history",
+      "identity",
+      "storage",
+      "alarms",
+    ],
     host_permissions: ["https://www.googleapis.com/*"],
     oauth2: {
       client_id:

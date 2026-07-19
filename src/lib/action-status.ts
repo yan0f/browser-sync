@@ -1,3 +1,5 @@
+import { logDiagnostic, logError } from "./diagnostics";
+
 export interface ToolbarStatus {
   connected: boolean;
   enabled: boolean;
@@ -50,8 +52,16 @@ export async function updateToolbarStatus(status: ToolbarStatus): Promise<void> 
     const failure = results.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
-    if (failure) console.warn("Не удалось обновить статус BrowserSync", failure.reason);
+    if (failure) {
+      logError("toolbar.api_failed", failure.reason);
+    } else {
+      logDiagnostic("debug", "toolbar.updated", {
+        badge: presentation.badge || "none",
+        syncing: status.syncing,
+        error: Boolean(status.error),
+      });
+    }
   } catch (error) {
-    console.warn("Не удалось обновить статус BrowserSync", error);
+    logError("toolbar.update_failed", error);
   }
 }

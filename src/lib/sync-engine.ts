@@ -49,8 +49,14 @@ import {
   maxClock,
   maxHistoryClock,
 } from "./reducer";
-import { querySupportedTabs, reconcileTabs } from "./tabs";
-import { isSupportedUrl } from "./tabs";
+import {
+  assignSyncedGroups,
+  isSupportedUrl,
+  querySupportedTabs,
+  queryTabGroups,
+  reconcileTabs,
+  sameSyncedGroup,
+} from "./tabs";
 import {
   bookmarkCount,
   captureBookmarks,
@@ -59,8 +65,16 @@ import {
 } from "./bookmarks";
 import { queryHistoryUrls, reconcileHistory } from "./history";
 import { updateToolbarStatus } from "./action-status";
+import { errorDetails, logDiagnostic, logError, logInfo } from "./diagnostics";
 
 const SYNC_ALARM = "browsersync-poll";
+
+export function shouldApplyRemoteState(
+  remoteChanged: boolean,
+  forceApply: boolean,
+): boolean {
+  return remoteChanged || forceApply;
+}
 
 class SyncEngine {
   private syncing = false;
@@ -76,6 +90,8 @@ class SyncEngine {
   private lastError: string | undefined;
   private dirty = false;
   private localRevision = 0;
+  private pendingLocalSources = new Set<string>();
+  private recentlyMovedTabIds = new Set<number>();
   private captureTimer: ReturnType<typeof setTimeout> | undefined;
   private queue: Promise<void> = Promise.resolve();
 
@@ -86,20 +102,34 @@ class SyncEngine {
     }
   }
 
-  noteLocalChange(): void {
+  noteLocalChange(source = "unknown"): void {
     if (!this.active) return;
     this.dirty = true;
     this.localRevision += 1;
+    this.pendingLocalSources.add(source);
     if (this.captureTimer) clearTimeout(this.captureTimer);
     this.captureTimer = setTimeout(() => {
       this.captureTimer = undefined;
-      void this.runQueued(() => this.sync(true));
+      const sources = [...this.pendingLocalSources];
+      this.pendingLocalSources.clear();
+      logInfo("sync.local_changes", {
+        revision: this.localRevision,
+        sources,
+      });
+      void this.runQueued(() => this.sync(true), "local_changes").catch((error) =>
+        this.reportError(error),
+      );
     }, 700);
+  }
+
+  noteTabGroupChange(tabId: number): void {
+    this.recentlyMovedTabIds.add(tabId);
+    this.noteLocalChange("tabs.group_changed");
   }
 
   noteBookmarkChange(): void {
     if (!this.bookmarksActive || this.applyingBookmarks) return;
-    this.noteLocalChange();
+    this.noteLocalChange("bookmarks");
   }
 
   noteHistoryVisited(item: chrome.history.HistoryItem): void {
@@ -108,7 +138,7 @@ class SyncEngine {
     this.pendingHistoryRemoved.delete(item.url);
     this.pendingHistoryAdded.add(item.url);
     this.pendingHistoryRevision += 1;
-    this.noteLocalChange();
+    this.noteLocalChange("history.visited");
   }
 
   noteHistoryRemoved(result: chrome.history.RemovedResult): void {
@@ -125,10 +155,11 @@ class SyncEngine {
       }
     }
     this.pendingHistoryRevision += 1;
-    this.noteLocalChange();
+    this.noteLocalChange("history.removed");
   }
 
   async startup(): Promise<void> {
+    logInfo("worker.startup");
     const { browserSyncInitialized, bookmarksEnabled, historyEnabled } =
       await chrome.storage.local.get([
         "browserSyncInitialized",
@@ -146,18 +177,25 @@ class SyncEngine {
     this.bookmarksActive = this.active && bookmarksEnabled === true;
     this.historyActive = this.active && historyEnabled === true;
     if (!this.active) {
+      logInfo("worker.idle", { reason: "sync_disabled" });
       await chrome.alarms.clear(SYNC_ALARM);
       await this.updateToolbar();
       return;
     }
+    logInfo("worker.active", {
+      bookmarks: this.bookmarksActive,
+      history: this.historyActive,
+    });
     await this.ensureAlarm();
-    await this.runQueued(() => this.sync(false));
+    await this.runQueued(() => this.sync(false, true), "startup");
   }
 
   async connect(): Promise<void> {
+    logInfo("auth.connect_started");
     await getAccessToken(true);
     await chrome.storage.local.set({ connected: true });
     this.lastError = undefined;
+    logInfo("auth.connected");
     await this.updateToolbar();
   }
 
@@ -182,7 +220,7 @@ class SyncEngine {
       }
       await this.applyRemoteState(canonical);
       await this.recordLastSync();
-    });
+    }, "enable");
   }
 
   async disable(): Promise<void> {
@@ -191,6 +229,7 @@ class SyncEngine {
     this.bookmarksActive = false;
     this.historyActive = false;
     await chrome.alarms.clear(SYNC_ALARM);
+    logInfo("sync.disabled");
     await this.updateToolbar();
   }
 
@@ -202,12 +241,16 @@ class SyncEngine {
     this.historyActive = false;
     await chrome.alarms.clear(SYNC_ALARM);
     this.lastError = undefined;
+    logInfo("auth.disconnected");
     await this.updateToolbar();
   }
 
-  async syncNow(): Promise<void> {
+  async syncNow(forceApply = true): Promise<void> {
     if (!(await isEnabled())) throw new Error("Synchronization is disabled");
-    await this.runQueued(() => this.sync(this.dirty));
+    await this.runQueued(
+      () => this.sync(this.dirty, forceApply),
+      forceApply ? "manual" : "alarm",
+    );
   }
 
   async setBookmarksEnabled(enabled: boolean): Promise<void> {
@@ -225,7 +268,7 @@ class SyncEngine {
         await this.flushOutbox();
       }
       await this.recordLastSync();
-    });
+    }, "bookmarks_enabled");
   }
 
   async setHistoryEnabled(enabled: boolean): Promise<void> {
@@ -243,7 +286,7 @@ class SyncEngine {
         await this.flushOutbox();
       }
       await this.recordLastSync();
-    });
+    }, "history_enabled");
   }
 
   async status(): Promise<SyncStatus> {
@@ -296,6 +339,7 @@ class SyncEngine {
 
   reportError(error: unknown): void {
     this.lastError = error instanceof Error ? error.message : String(error);
+    logError("sync.unhandled_error", error);
     void this.updateToolbar();
   }
 
@@ -322,15 +366,29 @@ class SyncEngine {
     }
   }
 
-  private async runQueued(task: () => Promise<void>): Promise<void> {
+  private async runQueued(
+    task: () => Promise<void>,
+    reason: string,
+  ): Promise<void> {
     const next = this.queue.then(async () => {
+      const startedAt = Date.now();
       this.syncing = true;
+      logInfo("sync.started", { reason });
       await this.updateToolbar();
       try {
         await task();
         this.lastError = undefined;
+        logInfo("sync.completed", {
+          reason,
+          durationMs: Date.now() - startedAt,
+        });
       } catch (error) {
         this.lastError = error instanceof Error ? error.message : String(error);
+        logDiagnostic("error", "sync.failed", {
+          reason,
+          durationMs: Date.now() - startedAt,
+          ...errorDetails(error),
+        });
         throw error;
       } finally {
         this.syncing = false;
@@ -354,11 +412,11 @@ class SyncEngine {
         ...(this.lastError ? { error: this.lastError } : {}),
       });
     } catch (error) {
-      console.warn("Не удалось прочитать состояние BrowserSync для toolbar", error);
+      logError("toolbar.update_failed", error);
     }
   }
 
-  private async sync(captureFirst: boolean): Promise<void> {
+  private async sync(captureFirst: boolean, forceApply = false): Promise<void> {
     if (!(await isEnabled())) return;
     let stableRevision = this.localRevision;
     if (captureFirst) {
@@ -366,13 +424,19 @@ class SyncEngine {
       if (capturedRevision === undefined) return;
       stableRevision = capturedRevision;
     }
-    await this.pullRemote();
+    const remoteChanged = await this.pullRemote();
 
     // A tab may be closed while an earlier upsert is being uploaded or while
     // Drive changes are being downloaded. Applying the stale canonical state
     // here would recreate that tab. The scheduled local-change pass will first
     // persist the newer browser state and reconcile safely afterwards.
     if (this.localRevision !== stableRevision) return;
+
+    if (!shouldApplyRemoteState(remoteChanged, forceApply)) {
+      logInfo("sync.reconcile_skipped", { reason: "no_remote_changes" });
+      await this.recordLastSync();
+      return;
+    }
 
     await this.applyRemoteState(await getCanonicalState());
     await this.recordLastSync();
@@ -429,18 +493,30 @@ class SyncEngine {
   }
 
   private async seedFromLocalTabs(): Promise<void> {
-    const tabs = await querySupportedTabs();
+    const [tabs, localGroups] = await Promise.all([
+      querySupportedTabs(),
+      queryTabGroups(),
+    ]);
     const mappings = new Map<string, number>();
     const operations: SyncOperation[] = [];
-    for (const [position, tab] of tabs.entries()) {
+    const logicalIds = new Map<number, string>();
+    for (const tab of tabs) {
       const id = crypto.randomUUID();
       mappings.set(id, tab.id!);
+      logicalIds.set(tab.id!, id);
+    }
+    const groups = assignSyncedGroups(tabs, localGroups, {}, mappings);
+    for (const [position, tab] of tabs.entries()) {
+      const id = logicalIds.get(tab.id!)!;
+      const group =
+        tab.groupId === undefined ? undefined : groups.get(tab.groupId);
       operations.push(
         await this.createUpsert({
           id,
           url: tab.url!,
           pinned: Boolean(tab.pinned),
           position,
+          ...(group ? { group } : {}),
         }),
       );
     }
@@ -458,13 +534,24 @@ class SyncEngine {
   }
 
   private async captureLocalChanges(): Promise<void> {
-    const [tabs, canonical, mappings] = await Promise.all([
+    const recentlyMovedTabIds = new Set(this.recentlyMovedTabIds);
+    this.recentlyMovedTabIds.clear();
+    const [tabs, canonical, mappings, localGroups] = await Promise.all([
       querySupportedTabs(),
       getCanonicalState(),
       getMappings(),
+      queryTabGroups(),
     ]);
     const tabsById = new Map(tabs.map((tab) => [tab.id!, tab]));
     const mappedTabIds = new Set(mappings.values());
+    const groups = assignSyncedGroups(
+      tabs,
+      localGroups,
+      canonical,
+      mappings,
+      undefined,
+      recentlyMovedTabIds,
+    );
     const operations: SyncOperation[] = [];
 
     for (const [logicalId, localTabId] of mappings) {
@@ -480,10 +567,14 @@ class SyncEngine {
         url: local.url!,
         pinned: Boolean(local.pinned),
         position: local.index,
+        ...(local.groupId !== undefined && groups.has(local.groupId)
+          ? { group: groups.get(local.groupId)! }
+          : {}),
       };
       if (
         next.url !== current.url ||
-        next.pinned !== current.pinned
+        next.pinned !== current.pinned ||
+        !sameSyncedGroup(next.group, current.group)
       ) {
         operations.push(await this.createUpsert(next));
       }
@@ -493,12 +584,15 @@ class SyncEngine {
       if (mappedTabIds.has(tab.id!)) continue;
       const logicalId = crypto.randomUUID();
       mappings.set(logicalId, tab.id!);
+      const group =
+        tab.groupId === undefined ? undefined : groups.get(tab.groupId);
       operations.push(
         await this.createUpsert({
           id: logicalId,
           url: tab.url!,
           pinned: Boolean(tab.pinned),
           position: tab.index,
+          ...(group ? { group } : {}),
         }),
       );
     }
@@ -507,6 +601,11 @@ class SyncEngine {
       await enqueueOperations(operations);
       await setCanonicalState(applyOperations(canonical, operations));
     }
+    logInfo("sync.local_captured", {
+      tabs: tabs.length,
+      groups: localGroups.size,
+      operations: operations.length,
+    });
     await replaceMappings(mappings);
     if (this.bookmarksActive) await this.captureBookmarkChanges();
     if (this.historyActive) await this.captureHistoryChanges();
@@ -574,9 +673,13 @@ class SyncEngine {
     await markFileSeen(file.id);
     await removeFromOutbox(operations.map((operation) => operation.id));
     await setMeta("cloudInitialized", true);
+    logInfo("drive.outbox_uploaded", {
+      operations: operations.length,
+      fileId: file.id,
+    });
   }
 
-  private async pullRemote(): Promise<void> {
+  private async pullRemote(): Promise<boolean> {
     let changeToken = await getMeta<string | undefined>("changeToken", undefined);
     let files;
     let nextToken: string;
@@ -593,9 +696,17 @@ class SyncEngine {
     let canonicalBookmarks = await getCanonicalBookmarks();
     let canonicalHistory = await getCanonicalHistory();
     if (files.length > 0) await setMeta("cloudInitialized", true);
+    logInfo("drive.changes_received", {
+      mode: changeToken ? "incremental" : "full",
+      files: files.length,
+    });
+    let downloadedFiles = 0;
+    let downloadedOperations = 0;
     for (const file of files) {
       if (await hasSeenFile(file.id)) continue;
       const batch = await downloadOperationBatch(file.id);
+      downloadedFiles += 1;
+      downloadedOperations += batch.operations.length;
       canonical = applyOperations(canonical, batch.operations);
       canonicalBookmarks = applyBookmarkOperations(canonicalBookmarks, batch.operations);
       canonicalHistory = applyHistoryOperations(canonicalHistory, batch.operations);
@@ -629,11 +740,18 @@ class SyncEngine {
         ? setLastClock(remoteMaxClock)
         : Promise.resolve(),
     ]);
+    logInfo("drive.operations_applied", {
+      files: downloadedFiles,
+      operations: downloadedOperations,
+    });
+    return downloadedOperations > 0;
   }
 
   private async applyRemoteState(canonical: CanonicalState): Promise<void> {
-    const mappings = await reconcileTabs(activeTabs(canonical), await getMappings());
+    const tabs = activeTabs(canonical);
+    const mappings = await reconcileTabs(tabs, await getMappings());
     await replaceMappings(mappings);
+    logInfo("sync.remote_applied", { tabs: tabs.length });
     if (this.bookmarksActive) {
       const bookmarks = await getCanonicalBookmarks();
       if (bookmarks) await this.applyRemoteBookmarks(bookmarks.snapshot);

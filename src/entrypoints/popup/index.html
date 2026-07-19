@@ -27,6 +27,23 @@
 
       <div id="actions" class="actions"></div>
 
+      <details class="diagnostics">
+        <summary>Диагностика</summary>
+        <p>
+          Журнал хранит последние 300 событий локально и не содержит содержимое
+          вкладок, закладок или истории.
+        </p>
+        <div class="diagnostic-actions">
+          <button id="copy-log" class="secondary" type="button">
+            Скопировать журнал
+          </button>
+          <button id="clear-log" class="secondary" type="button">
+            Очистить
+          </button>
+        </div>
+        <p id="diagnostic-status" aria-live="polite"></p>
+      </details>
+
       <footer>
         Вкладки синхронизируются автоматически. Закладки и история включаются
         отдельными переключателями.

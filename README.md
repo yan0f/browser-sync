@@ -16,14 +16,16 @@ user's hidden Google Drive `appDataFolder`; no application backend is required.
 - incremental polling through the Drive Changes API
 - local durable state and outbox in IndexedDB
 - create, navigate, close, pin and unpin synchronization
+- tab group membership, title, color and collapsed state synchronization
 - one-switch synchronization of the complete bookmarks tree
 - one-switch synchronization of new HTTP/HTTPS addresses visited after opt-in
 - deterministic last-write-wins conflict resolution with tombstones
 - automatic polling every 30 seconds
+- persistent rolling diagnostic log with one-click copy from the popup
 
 Incognito tabs, browser-internal pages, extension pages and `file://` URLs are
-not synchronized. Window layout, tab groups and active tab are not part of the
-MVP. Tab ordering across multiple windows is intentionally not
+not synchronized. Window layout and active tab are not part of the MVP. Tab
+ordering across multiple windows is intentionally not
 synchronized yet because Chromium indexes are scoped to a window rather than a
 browser profile.
 
@@ -92,3 +94,11 @@ tabs. Unsupported and incognito tabs are left untouched.
 The current journal format favors correctness under concurrent writers. Journal
 compaction and cloud reset controls are planned after validating the end-to-end
 flow with two Chrome profiles.
+
+## Diagnostics
+
+Open the popup and expand **Diagnostics** to copy the latest 300 structured
+events. The log survives service-worker restarts and records synchronization
+stages, durations, event sources, operation counts, Drive batches and errors. It
+does not record tab URLs, bookmark contents, browsing-history addresses or OAuth
+tokens. Use **Clear** to remove it from local extension storage.

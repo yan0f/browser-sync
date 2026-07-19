@@ -1,4 +1,8 @@
 import type { RuntimeRequest, RuntimeResponse, SyncStatus } from "../../lib/model";
+import {
+  clearDiagnosticLogs,
+  createDiagnosticReport,
+} from "../../lib/diagnostics";
 import "./style.css";
 
 const summary = document.querySelector<HTMLParagraphElement>("#summary")!;
@@ -10,6 +14,10 @@ const lastSync = document.querySelector<HTMLElement>("#last-sync")!;
 const warning = document.querySelector<HTMLParagraphElement>("#warning")!;
 const errorBox = document.querySelector<HTMLParagraphElement>("#error")!;
 const actions = document.querySelector<HTMLDivElement>("#actions")!;
+const copyLog = document.querySelector<HTMLButtonElement>("#copy-log")!;
+const clearLog = document.querySelector<HTMLButtonElement>("#clear-log")!;
+const diagnosticStatus =
+  document.querySelector<HTMLParagraphElement>("#diagnostic-status")!;
 
 const REQUEST_TIMEOUTS: Record<RuntimeRequest["type"], number> = {
   status: 5_000,
@@ -167,6 +175,49 @@ function render(status: SyncStatus, explicitError?: string): void {
     button("Приостановить", "disable", true),
   );
 }
+
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.append(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    if (!copied) throw new Error("Браузер запретил доступ к буферу обмена");
+  }
+}
+
+copyLog.addEventListener("click", async () => {
+  copyLog.disabled = true;
+  diagnosticStatus.textContent = "Подготовка журнала…";
+  try {
+    await copyText(await createDiagnosticReport());
+    diagnosticStatus.textContent = "Журнал скопирован";
+  } catch (error) {
+    diagnosticStatus.textContent =
+      error instanceof Error ? error.message : String(error);
+  } finally {
+    copyLog.disabled = false;
+  }
+});
+
+clearLog.addEventListener("click", async () => {
+  clearLog.disabled = true;
+  try {
+    await clearDiagnosticLogs();
+    diagnosticStatus.textContent = "Журнал очищен";
+  } catch (error) {
+    diagnosticStatus.textContent =
+      error instanceof Error ? error.message : String(error);
+  } finally {
+    clearLog.disabled = false;
+  }
+});
 
 void request({ type: "status" })
   .then((response) => render(response.status, response.ok ? undefined : response.error))
