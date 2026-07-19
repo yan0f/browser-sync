@@ -6,8 +6,12 @@ export default defineBackground(() => {
   const noteLocalChange = (source: string) => () =>
     syncEngine.noteLocalChange(source);
 
-  chrome.tabs.onCreated.addListener(noteLocalChange("tabs.created"));
-  chrome.tabs.onRemoved.addListener(noteLocalChange("tabs.removed"));
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.id !== undefined) syncEngine.noteTabChange(tab.id, "tabs.created");
+  });
+  chrome.tabs.onRemoved.addListener((tabId) =>
+    syncEngine.noteTabChange(tabId, "tabs.removed"),
+  );
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.groupId !== undefined) {
       syncEngine.noteTabGroupChange(tabId);
@@ -15,7 +19,7 @@ export default defineBackground(() => {
       changeInfo.url !== undefined ||
       changeInfo.pinned !== undefined
     ) {
-      syncEngine.noteLocalChange("tabs.updated");
+      syncEngine.noteTabChange(tabId, "tabs.updated");
     }
   });
 

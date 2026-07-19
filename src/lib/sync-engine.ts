@@ -76,6 +76,19 @@ export function shouldApplyRemoteState(
   return remoteChanged || forceApply;
 }
 
+export function shouldRebaseLocalChanges(
+  remoteChanged: boolean,
+  changedTabCount: number,
+): boolean {
+  return remoteChanged && changedTabCount > 0;
+}
+
+interface LocalCaptureContext {
+  revision: number;
+  changedTabIds: Set<number>;
+  movedTabIds: Set<number>;
+}
+
 class SyncEngine {
   private syncing = false;
   private active = false;
@@ -91,6 +104,7 @@ class SyncEngine {
   private dirty = false;
   private localRevision = 0;
   private pendingLocalSources = new Set<string>();
+  private changedTabIds = new Set<number>();
   private recentlyMovedTabIds = new Set<number>();
   private captureTimer: ReturnType<typeof setTimeout> | undefined;
   private queue: Promise<void> = Promise.resolve();
@@ -123,8 +137,16 @@ class SyncEngine {
   }
 
   noteTabGroupChange(tabId: number): void {
+    if (!this.active) return;
+    this.changedTabIds.add(tabId);
     this.recentlyMovedTabIds.add(tabId);
     this.noteLocalChange("tabs.group_changed");
+  }
+
+  noteTabChange(tabId: number, source: string): void {
+    if (!this.active) return;
+    this.changedTabIds.add(tabId);
+    this.noteLocalChange(source);
   }
 
   noteBookmarkChange(): void {
@@ -419,10 +441,11 @@ class SyncEngine {
   private async sync(captureFirst: boolean, forceApply = false): Promise<void> {
     if (!(await isEnabled())) return;
     let stableRevision = this.localRevision;
+    let captureContext: LocalCaptureContext | undefined;
     if (captureFirst) {
-      const capturedRevision = await this.captureAndFlushUntilStable();
-      if (capturedRevision === undefined) return;
-      stableRevision = capturedRevision;
+      captureContext = await this.captureAndFlushUntilStable();
+      if (captureContext === undefined) return;
+      stableRevision = captureContext.revision;
     }
     const remoteChanged = await this.pullRemote();
 
@@ -431,6 +454,23 @@ class SyncEngine {
     // here would recreate that tab. The scheduled local-change pass will first
     // persist the newer browser state and reconcile safely afterwards.
     if (this.localRevision !== stableRevision) return;
+
+    if (
+      captureContext &&
+      shouldRebaseLocalChanges(
+        remoteChanged,
+        captureContext.changedTabIds.size,
+      )
+    ) {
+      await this.captureLocalChanges({
+        tabIds: captureContext.changedTabIds,
+        movedTabIds: captureContext.movedTabIds,
+        includeAuxiliary: false,
+        scope: "remote_rebase",
+      });
+      await this.flushOutbox();
+      if (this.localRevision !== stableRevision) return;
+    }
 
     if (!shouldApplyRemoteState(remoteChanged, forceApply)) {
       logInfo("sync.reconcile_skipped", { reason: "no_remote_changes" });
@@ -442,16 +482,26 @@ class SyncEngine {
     await this.recordLastSync();
   }
 
-  private async captureAndFlushUntilStable(): Promise<number | undefined> {
+  private async captureAndFlushUntilStable(): Promise<
+    LocalCaptureContext | undefined
+  > {
+    const changedTabIds = new Set<number>();
+    const movedTabIds = new Set<number>();
     for (let pass = 0; pass < 3; pass += 1) {
       const revision = this.localRevision;
-      await this.captureLocalChanges();
+      for (const tabId of this.changedTabIds) changedTabIds.add(tabId);
+      for (const tabId of this.recentlyMovedTabIds) movedTabIds.add(tabId);
+      this.changedTabIds.clear();
+      this.recentlyMovedTabIds.clear();
+      await this.captureLocalChanges({ movedTabIds });
       await this.flushOutbox();
       if (revision === this.localRevision) {
         this.dirty = false;
-        return revision;
+        return { revision, changedTabIds, movedTabIds };
       }
     }
+    for (const tabId of changedTabIds) this.changedTabIds.add(tabId);
+    for (const tabId of movedTabIds) this.recentlyMovedTabIds.add(tabId);
     return undefined;
   }
 
@@ -533,9 +583,20 @@ class SyncEngine {
     }
   }
 
-  private async captureLocalChanges(): Promise<void> {
-    const recentlyMovedTabIds = new Set(this.recentlyMovedTabIds);
-    this.recentlyMovedTabIds.clear();
+  private async captureLocalChanges(
+    options: {
+      tabIds?: ReadonlySet<number>;
+      movedTabIds?: ReadonlySet<number>;
+      includeAuxiliary?: boolean;
+      scope?: string;
+    } = {},
+  ): Promise<void> {
+    const {
+      tabIds,
+      movedTabIds = new Set<number>(),
+      includeAuxiliary = true,
+      scope = "all",
+    } = options;
     const [tabs, canonical, mappings, localGroups] = await Promise.all([
       querySupportedTabs(),
       getCanonicalState(),
@@ -550,11 +611,12 @@ class SyncEngine {
       canonical,
       mappings,
       undefined,
-      recentlyMovedTabIds,
+      movedTabIds,
     );
     const operations: SyncOperation[] = [];
 
     for (const [logicalId, localTabId] of mappings) {
+      if (tabIds && !tabIds.has(localTabId)) continue;
       const local = tabsById.get(localTabId);
       const current = canonical[logicalId]?.tab;
       if (!current) continue;
@@ -581,6 +643,7 @@ class SyncEngine {
     }
 
     for (const tab of tabs) {
+      if (tabIds && !tabIds.has(tab.id!)) continue;
       if (mappedTabIds.has(tab.id!)) continue;
       const logicalId = crypto.randomUUID();
       mappings.set(logicalId, tab.id!);
@@ -605,10 +668,15 @@ class SyncEngine {
       tabs: tabs.length,
       groups: localGroups.size,
       operations: operations.length,
+      scope,
     });
     await replaceMappings(mappings);
-    if (this.bookmarksActive) await this.captureBookmarkChanges();
-    if (this.historyActive) await this.captureHistoryChanges();
+    if (includeAuxiliary && this.bookmarksActive) {
+      await this.captureBookmarkChanges();
+    }
+    if (includeAuxiliary && this.historyActive) {
+      await this.captureHistoryChanges();
+    }
   }
 
   private async captureBookmarkChanges(): Promise<void> {
