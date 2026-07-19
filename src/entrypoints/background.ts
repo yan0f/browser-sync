@@ -4,7 +4,7 @@ import { SYNC_ALARM, syncEngine } from "../lib/sync-engine";
 
 export default defineBackground(() => {
   const noteLocalChange = (source: string) => () =>
-    syncEngine.noteLocalChange(source);
+    syncEngine.noteTabStructureChange(source);
 
   chrome.tabs.onCreated.addListener((tab) => {
     if (tab.id !== undefined) syncEngine.noteTabChange(tab.id, "tabs.created");
@@ -14,7 +14,7 @@ export default defineBackground(() => {
   );
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.groupId !== undefined) {
-      syncEngine.noteTabGroupChange(tabId);
+      syncEngine.noteTabGroupChange(tabId, changeInfo.groupId);
     } else if (
       changeInfo.url !== undefined ||
       changeInfo.pinned !== undefined
@@ -41,7 +41,7 @@ export default defineBackground(() => {
 
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === SYNC_ALARM) {
-      void syncEngine.syncNow(false).catch(() => undefined);
+      void syncEngine.syncNow("alarm").catch(() => undefined);
     }
   });
 

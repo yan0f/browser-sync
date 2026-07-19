@@ -1,8 +1,4 @@
 import type { RuntimeRequest, RuntimeResponse, SyncStatus } from "../../lib/model";
-import {
-  clearDiagnosticLogs,
-  createDiagnosticReport,
-} from "../../lib/diagnostics";
 import "./style.css";
 
 const summary = document.querySelector<HTMLParagraphElement>("#summary")!;
@@ -14,10 +10,6 @@ const lastSync = document.querySelector<HTMLElement>("#last-sync")!;
 const warning = document.querySelector<HTMLParagraphElement>("#warning")!;
 const errorBox = document.querySelector<HTMLParagraphElement>("#error")!;
 const actions = document.querySelector<HTMLDivElement>("#actions")!;
-const copyLog = document.querySelector<HTMLButtonElement>("#copy-log")!;
-const clearLog = document.querySelector<HTMLButtonElement>("#clear-log")!;
-const diagnosticStatus =
-  document.querySelector<HTMLParagraphElement>("#diagnostic-status")!;
 
 const REQUEST_TIMEOUTS: Record<RuntimeRequest["type"], number> = {
   status: 5_000,
@@ -192,32 +184,67 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-copyLog.addEventListener("click", async () => {
-  copyLog.disabled = true;
-  diagnosticStatus.textContent = "Подготовка журнала…";
-  try {
-    await copyText(await createDiagnosticReport());
-    diagnosticStatus.textContent = "Журнал скопирован";
-  } catch (error) {
-    diagnosticStatus.textContent =
-      error instanceof Error ? error.message : String(error);
-  } finally {
-    copyLog.disabled = false;
-  }
-});
+function setupDiagnostics(): void {
+  const diagnostics = document.createElement("details");
+  diagnostics.className = "diagnostics";
+  const diagnosticsSummary = document.createElement("summary");
+  diagnosticsSummary.textContent = "Диагностика";
+  const description = document.createElement("p");
+  description.textContent =
+    "Журнал хранит последние 300 событий локально и не содержит содержимое вкладок, закладок или истории.";
+  const diagnosticActions = document.createElement("div");
+  diagnosticActions.className = "diagnostic-actions";
+  const copyLog = document.createElement("button");
+  copyLog.type = "button";
+  copyLog.className = "secondary";
+  copyLog.textContent = "Скопировать журнал";
+  const clearLog = document.createElement("button");
+  clearLog.type = "button";
+  clearLog.className = "secondary";
+  clearLog.textContent = "Очистить";
+  diagnosticActions.append(copyLog, clearLog);
+  const diagnosticStatus = document.createElement("p");
+  diagnosticStatus.id = "diagnostic-status";
+  diagnosticStatus.setAttribute("aria-live", "polite");
+  diagnostics.append(
+    diagnosticsSummary,
+    description,
+    diagnosticActions,
+    diagnosticStatus,
+  );
+  document.querySelector("footer")!.before(diagnostics);
 
-clearLog.addEventListener("click", async () => {
-  clearLog.disabled = true;
-  try {
-    await clearDiagnosticLogs();
-    diagnosticStatus.textContent = "Журнал очищен";
-  } catch (error) {
-    diagnosticStatus.textContent =
-      error instanceof Error ? error.message : String(error);
-  } finally {
-    clearLog.disabled = false;
-  }
-});
+  copyLog.addEventListener("click", async () => {
+    copyLog.disabled = true;
+    diagnosticStatus.textContent = "Подготовка журнала…";
+    try {
+      const { createDiagnosticReport } = await import("../../lib/diagnostics");
+      await copyText(await createDiagnosticReport());
+      diagnosticStatus.textContent = "Журнал скопирован";
+    } catch (error) {
+      diagnosticStatus.textContent =
+        error instanceof Error ? error.message : String(error);
+    } finally {
+      copyLog.disabled = false;
+    }
+  });
+
+  clearLog.addEventListener("click", async () => {
+    clearLog.disabled = true;
+    try {
+      const { clearDiagnosticLogs } = await import("../../lib/diagnostics");
+      await clearDiagnosticLogs();
+      diagnosticStatus.textContent = "Журнал очищен";
+    } catch (error) {
+      diagnosticStatus.textContent =
+        error instanceof Error ? error.message : String(error);
+    } finally {
+      clearLog.disabled = false;
+    }
+  });
+}
+
+setupDiagnostics();
 
 void request({ type: "status" })
   .then((response) => render(response.status, response.ok ? undefined : response.error))

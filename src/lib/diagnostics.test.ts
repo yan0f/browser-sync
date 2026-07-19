@@ -26,7 +26,7 @@ describe("diagnostics", () => {
         },
       },
       runtime: {
-        getManifest: () => ({ version: "0.2.2" }),
+        getManifest: () => ({ version: "0.2.4" }),
       },
     });
 

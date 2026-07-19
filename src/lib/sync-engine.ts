@@ -83,10 +83,24 @@ export function shouldRebaseLocalChanges(
   return remoteChanged && changedTabCount > 0;
 }
 
+export function shouldCreateTabUpsert(
+  next: SyncedTab,
+  current: SyncedTab,
+  force: boolean,
+): boolean {
+  return (
+    force ||
+    next.url !== current.url ||
+    next.pinned !== current.pinned ||
+    !sameSyncedGroup(next.group, current.group)
+  );
+}
+
 interface LocalCaptureContext {
   revision: number;
   changedTabIds: Set<number>;
   movedTabIds: Set<number>;
+  ungroupedTabIds: Set<number>;
 }
 
 class SyncEngine {
@@ -96,6 +110,7 @@ class SyncEngine {
   private applyingBookmarks = false;
   private historyActive = false;
   private applyingHistory = false;
+  private applyingTabs = false;
   private pendingHistoryAdded = new Set<string>();
   private pendingHistoryRemoved = new Set<string>();
   private pendingHistoryClear = false;
@@ -106,6 +121,7 @@ class SyncEngine {
   private pendingLocalSources = new Set<string>();
   private changedTabIds = new Set<number>();
   private recentlyMovedTabIds = new Set<number>();
+  private explicitlyUngroupedTabIds = new Set<number>();
   private captureTimer: ReturnType<typeof setTimeout> | undefined;
   private queue: Promise<void> = Promise.resolve();
 
@@ -136,16 +152,24 @@ class SyncEngine {
     }, 700);
   }
 
-  noteTabGroupChange(tabId: number): void {
-    if (!this.active) return;
+  noteTabGroupChange(tabId: number, groupId: number): void {
+    if (!this.active || this.applyingTabs) return;
     this.changedTabIds.add(tabId);
     this.recentlyMovedTabIds.add(tabId);
+    if (groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) {
+      this.explicitlyUngroupedTabIds.add(tabId);
+    }
     this.noteLocalChange("tabs.group_changed");
   }
 
   noteTabChange(tabId: number, source: string): void {
-    if (!this.active) return;
+    if (!this.active || this.applyingTabs) return;
     this.changedTabIds.add(tabId);
+    this.noteLocalChange(source);
+  }
+
+  noteTabStructureChange(source: string): void {
+    if (this.applyingTabs) return;
     this.noteLocalChange(source);
   }
 
@@ -267,12 +291,9 @@ class SyncEngine {
     await this.updateToolbar();
   }
 
-  async syncNow(forceApply = true): Promise<void> {
+  async syncNow(reason: "manual" | "alarm" = "manual"): Promise<void> {
     if (!(await isEnabled())) throw new Error("Synchronization is disabled");
-    await this.runQueued(
-      () => this.sync(this.dirty, forceApply),
-      forceApply ? "manual" : "alarm",
-    );
+    await this.runQueued(() => this.sync(this.dirty), reason);
   }
 
   async setBookmarksEnabled(enabled: boolean): Promise<void> {
@@ -465,6 +486,7 @@ class SyncEngine {
       await this.captureLocalChanges({
         tabIds: captureContext.changedTabIds,
         movedTabIds: captureContext.movedTabIds,
+        forceTabIds: captureContext.ungroupedTabIds,
         includeAuxiliary: false,
         scope: "remote_rebase",
       });
@@ -487,21 +509,32 @@ class SyncEngine {
   > {
     const changedTabIds = new Set<number>();
     const movedTabIds = new Set<number>();
+    const ungroupedTabIds = new Set<number>();
     for (let pass = 0; pass < 3; pass += 1) {
       const revision = this.localRevision;
       for (const tabId of this.changedTabIds) changedTabIds.add(tabId);
       for (const tabId of this.recentlyMovedTabIds) movedTabIds.add(tabId);
+      for (const tabId of this.explicitlyUngroupedTabIds) {
+        ungroupedTabIds.add(tabId);
+      }
       this.changedTabIds.clear();
       this.recentlyMovedTabIds.clear();
-      await this.captureLocalChanges({ movedTabIds });
+      this.explicitlyUngroupedTabIds.clear();
+      await this.captureLocalChanges({
+        movedTabIds,
+        forceTabIds: ungroupedTabIds,
+      });
       await this.flushOutbox();
       if (revision === this.localRevision) {
         this.dirty = false;
-        return { revision, changedTabIds, movedTabIds };
+        return { revision, changedTabIds, movedTabIds, ungroupedTabIds };
       }
     }
     for (const tabId of changedTabIds) this.changedTabIds.add(tabId);
     for (const tabId of movedTabIds) this.recentlyMovedTabIds.add(tabId);
+    for (const tabId of ungroupedTabIds) {
+      this.explicitlyUngroupedTabIds.add(tabId);
+    }
     return undefined;
   }
 
@@ -587,6 +620,7 @@ class SyncEngine {
     options: {
       tabIds?: ReadonlySet<number>;
       movedTabIds?: ReadonlySet<number>;
+      forceTabIds?: ReadonlySet<number>;
       includeAuxiliary?: boolean;
       scope?: string;
     } = {},
@@ -594,6 +628,7 @@ class SyncEngine {
     const {
       tabIds,
       movedTabIds = new Set<number>(),
+      forceTabIds = new Set<number>(),
       includeAuxiliary = true,
       scope = "all",
     } = options;
@@ -633,11 +668,7 @@ class SyncEngine {
           ? { group: groups.get(local.groupId)! }
           : {}),
       };
-      if (
-        next.url !== current.url ||
-        next.pinned !== current.pinned ||
-        !sameSyncedGroup(next.group, current.group)
-      ) {
+      if (shouldCreateTabUpsert(next, current, forceTabIds.has(localTabId))) {
         operations.push(await this.createUpsert(next));
       }
     }
@@ -817,9 +848,14 @@ class SyncEngine {
 
   private async applyRemoteState(canonical: CanonicalState): Promise<void> {
     const tabs = activeTabs(canonical);
-    const mappings = await reconcileTabs(tabs, await getMappings());
-    await replaceMappings(mappings);
-    logInfo("sync.remote_applied", { tabs: tabs.length });
+    this.applyingTabs = true;
+    try {
+      const mappings = await reconcileTabs(tabs, await getMappings());
+      await replaceMappings(mappings);
+      logInfo("sync.remote_applied", { tabs: tabs.length });
+    } finally {
+      this.applyingTabs = false;
+    }
     if (this.bookmarksActive) {
       const bookmarks = await getCanonicalBookmarks();
       if (bookmarks) await this.applyRemoteBookmarks(bookmarks.snapshot);
